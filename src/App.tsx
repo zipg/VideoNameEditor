@@ -1,4 +1,5 @@
 import { useMemo, useReducer, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -66,28 +67,22 @@ function App() {
   const [showBatchEdit, setShowBatchEdit] = useState(false);
   const [batchForm, setBatchForm] = useState({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
   const [showGuardModal, setShowGuardModal] = useState(false);
-  const pendingFilesRef = useRef<File[] | null>(null);
+  const [errorLog, setErrorLog] = useState<string[]>([]);
+  const pendingFilesRef = useRef<string[] | null>(null);
 
   const failedRows = useMemo(() => rows.filter((row) => row.parseStatus === "failed"), [rows]);
   const successRows = useMemo(() => rows.filter((row) => row.parseStatus === "success"), [rows]);
 
-  function hasUnfinishedChanges() {
-    return (
-      appState.guard.hasUnsavedChanges || appState.guard.isRenaming || appState.guard.hasPartialFailure
-    );
+  function appendError(title: string, error: unknown) {
+    const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error);
+    setErrorLog((prev) => [
+      ...prev,
+      `[${new Date().toLocaleString()}] ${title}\n${message}`,
+    ]);
   }
 
-  async function parseInputFiles(files: File[]) {
-    const mp4Files = files.filter((f) => f.name.toLowerCase().endsWith(".mp4"));
-    if (!mp4Files.length) return;
-
-    const paths = mp4Files.map((file) => (file as File & { path?: string }).path).filter(Boolean) as string[];
-    if (!paths.length) return;
-
-    const result = await invoke<ParseFileRowDto[]>("parse_files", { paths });
-    const parsedRows = result.map(dtoToRow);
+  function resetAfterParse(parsedRows: FileRow[]) {
     setRows(parsedRows);
-
     const successCount = parsedRows.filter((row) => row.parseStatus === "success").length;
     const failedCount = parsedRows.length - successCount;
     window.alert(`文件名解析成功 ${successCount} 个，失败 ${failedCount} 个`);
@@ -99,34 +94,71 @@ function App() {
     setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
   }
 
+
+  function hasUnfinishedChanges() {
+    return (
+      appState.guard.hasUnsavedChanges || appState.guard.isRenaming || appState.guard.hasPartialFailure
+    );
+  }
+
+  async function parseInputPaths(paths: string[]) {
+    const mp4Paths = paths.filter((p) => p.toLowerCase().endsWith(".mp4"));
+    if (!mp4Paths.length) {
+      appendError("未找到可解析的 MP4 文件", "请确认选择或拖拽的是 .mp4 文件");
+      return;
+    }
+
+    try {
+      setErrorLog([]);
+      const result = await invoke<ParseFileRowDto[]>("parse_files", { paths: mp4Paths });
+      const parsedRows = result.map(dtoToRow);
+      resetAfterParse(parsedRows);
+    } catch (error) {
+      appendError("调用 parse_files 失败", error);
+      window.alert("解析失败，请查看下方错误信息。\n如果是拖拽导入，建议优先使用“批量解析”按钮。");
+    }
+  }
+
   async function onPickFiles() {
     if (hasUnfinishedChanges()) {
       setShowGuardModal(true);
       return;
     }
 
-    const input = document.createElement("input");
-    input.type = "file";
-    input.multiple = true;
-    input.accept = ".mp4";
-    input.onchange = async () => {
-      const files = Array.from(input.files || []);
-      await parseInputFiles(files);
-    };
-    input.click();
+    try {
+      const picked = await open({
+        multiple: true,
+        filters: [{ name: "MP4", extensions: ["mp4"] }],
+      });
+      if (!picked) return;
+
+      const paths = Array.isArray(picked) ? picked : [picked];
+      await parseInputPaths(paths);
+    } catch (error) {
+      appendError("打开文件选择器失败", error);
+      window.alert("打开文件选择器失败，请查看下方错误信息。");
+    }
   }
 
   async function onDropFiles(event: React.DragEvent<HTMLDivElement>) {
     event.preventDefault();
-    const files = Array.from(event.dataTransfer.files || []);
+    const droppedPaths = Array.from(event.dataTransfer.files || [])
+      .map((file) => (file as File & { path?: string }).path)
+      .filter(Boolean) as string[];
 
     if (hasUnfinishedChanges()) {
-      pendingFilesRef.current = files;
+      pendingFilesRef.current = droppedPaths;
       setShowGuardModal(true);
       return;
     }
 
-    await parseInputFiles(files);
+    if (!droppedPaths.length) {
+      appendError("拖拽导入失败", "未能读取拖拽文件路径，请使用“批量解析”按钮选择文件。");
+      window.alert("拖拽导入失败，请使用“批量解析”按钮。\n详细错误见下方错误信息区。");
+      return;
+    }
+
+    await parseInputPaths(droppedPaths);
   }
 
   function onManualOpen(rowId: string) {
@@ -236,28 +268,39 @@ function App() {
       setProgress({ current: i + 1, total: renameItems.length });
     }
 
-    const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
-      items: renameItems,
-    });
+    try {
+      const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
+        items: renameItems,
+      });
 
-    setSummary(result);
-    dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
+      setSummary(result);
+      dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
 
-    setRows((prev) =>
-      prev.map((row) => {
-        const matched = result.results.find((item) => item.id === row.id);
-        if (!matched) return row;
-        return {
-          ...row,
-          renameResult: matched.success ? "success" : "failed",
-          renameError: matched.reason,
-        };
-      }),
-    );
+      setRows((prev) =>
+        prev.map((row) => {
+          const matched = result.results.find((item) => item.id === row.id);
+          if (!matched) return row;
+          return {
+            ...row,
+            renameResult: matched.success ? "success" : "failed",
+            renameError: matched.reason,
+          };
+        }),
+      );
+    } catch (error) {
+      appendError("调用 execute_batch_rename 失败", error);
+      dispatch({ type: "RENAME_FINISHED", success: 0, failed: renameItems.length });
+      window.alert("批量重命名失败，请查看下方错误信息。");
+    }
   }
 
   async function onReveal(path: string) {
-    await revealItemInDir(path);
+    try {
+      await revealItemInDir(path);
+    } catch (error) {
+      appendError("定位文件失败", error);
+      window.alert("定位文件失败，请查看下方错误信息。");
+    }
   }
 
   async function onGuardContinue() {
@@ -265,15 +308,14 @@ function App() {
     dispatch({ type: "MARK_DIRTY", value: false });
 
     if (pendingFilesRef.current) {
-      const files = pendingFilesRef.current;
+      const paths = pendingFilesRef.current;
       pendingFilesRef.current = null;
-      await parseInputFiles(files);
+      await parseInputPaths(paths);
     }
   }
 
   return (
     <main className="page">
-      <h1>视频文件名批处理工具</h1>
 
       <section className="toolbar">
         <button type="button" onClick={onPickFiles}>
@@ -456,6 +498,15 @@ function App() {
               </ul>
             )}
           </>
+        )}
+      </section>
+
+      <section className="error-panel">
+        <h2>错误信息</h2>
+        {!errorLog.length ? (
+          <div className="error-empty">暂无错误</div>
+        ) : (
+          <pre className="error-log">{errorLog.join("\n\n")}</pre>
         )}
       </section>
 

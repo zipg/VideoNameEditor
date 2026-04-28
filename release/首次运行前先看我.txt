@@ -1,0 +1,6 @@
+1. 将 VideoNameEditor.app 拖拽复制到「应用程序」文件夹 (Applications)。
+
+2. 打开「终端」，运行：
+   xattr -cr /Applications/VideoNameEditor.app
+
+3. 启动本工具（可在启动台或应用程序中找到）。

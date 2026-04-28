@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "usersstaffvideo_name",
+  "productName": "VideoNameEditor",
   "version": "0.1.0",
-  "identifier": "com.staff.usersstaffvideo-name",
+  "identifier": "com.staff.videonameeditor",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "usersstaffvideo_name",
+        "title": "视频文件名批处理工具",
         "width": 800,
         "height": 600
       }

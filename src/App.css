@@ -40,7 +40,8 @@ button:disabled {
 .batch-editor,
 .failed-panel,
 .table-wrap,
-.result-panel {
+.result-panel,
+.error-panel {
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -111,6 +112,30 @@ tr.danger {
 
 .err {
   color: #dc2626;
+}
+
+.error-panel h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.error-empty {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.error-log {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #111827;
+  color: #f9fafb;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .modal-mask {
