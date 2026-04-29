@@ -19,6 +19,8 @@ type DragDropPayload = {
   paths?: string[];
 };
 
+const ZOOM_MODE_TIP = "1.四面放大 2.上下放大 3.向下拉长 4.向上拉长";
+
 function emptyManualDraft(): ManualDraft {
   return {
     videoName: "",
@@ -116,6 +118,26 @@ function formatDuration(durationSec: number): string {
   return `${mm}:${ss}`;
 }
 
+function draftNumber(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function durationChange(row: FileRow, draft: ManualDraft): { text: string; warning: boolean } {
+  const original = formatDuration(row.durationSec);
+  const headCut = Math.max(0, draftNumber(draft.headCut, 0));
+  const tailCut = Math.max(0, draftNumber(draft.tailCut, 0));
+  const cutTotal = headCut + tailCut;
+
+  if (cutTotal <= 0) return { text: `${original} → /`, warning: false };
+
+  const editedDuration = Math.max(0, row.durationSec - cutTotal);
+  return {
+    text: `${original} → ${formatDuration(editedDuration)}`,
+    warning: editedDuration < 1,
+  };
+}
+
 function parseErrorToText(error?: string): string {
   if (!error) return "未知错误";
 
@@ -208,6 +230,7 @@ function App() {
   const [batchForm, setBatchForm] = useState({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
   const [showGuardModal, setShowGuardModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
+  const [showErrorPanel, setShowErrorPanel] = useState(false);
   const [errorLog, setErrorLog] = useState<string[]>([]);
   const pendingFilesRef = useRef<string[] | null>(null);
   const pendingPickRef = useRef(false);
@@ -237,6 +260,8 @@ function App() {
 
   function resetAfterParse(parsedRows: FileRow[]) {
     setRows(parsedRows);
+    setErrorLog([]);
+    setShowErrorPanel(false);
     const successCount = parsedRows.filter((row) => row.parseStatus === "success").length;
     const failedRows = parsedRows.filter((row) => row.parseStatus === "failed");
     const failedCount = failedRows.length;
@@ -245,8 +270,7 @@ function App() {
     const diagnostics = parsedRows.filter((row) => (row.parseError || "").includes("probe_"));
 
     if (failedRows.length || diagnostics.length) {
-      setErrorLog((prev) => [
-        ...prev,
+      setErrorLog([
         ...failedRows.map(
           (row) =>
             `[${new Date().toLocaleString()}] 文件名解析失败\n${row.fileName}\n原因：${parseErrorToText(row.parseError)}`,
@@ -287,13 +311,15 @@ function App() {
   async function parseInputPaths(paths: string[]) {
     const normalizedPaths = paths.map((p) => p.trim()).filter(Boolean);
     const mp4Paths = normalizedPaths.filter((p) => p.toLowerCase().endsWith(".mp4"));
+    setErrorLog([]);
+    setShowErrorPanel(false);
+
     if (!mp4Paths.length) {
       appendError("未找到可解析的 MP4 文件", "请确认选择或拖拽的是 .mp4 文件");
       return;
     }
 
     try {
-      setErrorLog([]);
       const result = await invoke<ParseFileRowDto[]>("parse_files", { paths: mp4Paths });
       const parsedRows = result.map(dtoToRow);
       resetAfterParse(parsedRows);
@@ -392,6 +418,7 @@ function App() {
     setShowBatchEdit(false);
     setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
     setErrorLog([]);
+    setShowErrorPanel(false);
     dispatch({ type: "MARK_DIRTY", value: false });
   }
 
@@ -758,7 +785,7 @@ function App() {
 
       dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
       window.alert(
-        `批量修改完成：${result.success} 个成功，${unchangedCount} 个视频文件名无变化，${result.failed} 个失败`,
+        `批量修改完成：${result.success} 个成功，${result.failed} 个失败，${unchangedCount} 个视频文件名无变化`,
       );
 
       setRows((prev) =>
@@ -835,9 +862,6 @@ function App() {
     <main className="page">
 
       <section className="toolbar">
-        <button type="button" onClick={onPickFiles}>
-          批量解析
-        </button>
         <button type="button" onClick={onBatchEdit} disabled={!rows.length}>
           批量修改
         </button>
@@ -884,8 +908,8 @@ function App() {
                 <th>头部切除</th>
                 <th>尾部切除</th>
                 <th>放大比例</th>
-                <th>放大模式</th>
-                <th>视频时长</th>
+                <th title={ZOOM_MODE_TIP}>放大模式</th>
+                <th>时长变化</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -922,6 +946,7 @@ function App() {
                   <td>
                     <input
                       value={batchForm.zoomMode}
+                      title={ZOOM_MODE_TIP}
                       onChange={(e) => onBatchFieldChange("zoomMode", e.target.value)}
                       onBlur={() => onBatchFieldBlur("zoomMode")}
                     />
@@ -936,6 +961,7 @@ function App() {
               )}
               {sortedRows.map((row) => {
                 const draft = draftFromRow(row);
+                const duration = durationChange(row, draft);
                 return (
                   <tr
                     key={row.id}
@@ -993,6 +1019,7 @@ function App() {
                               <input
                                 placeholder="放大模式"
                                 value={row.manualDraft?.zoomMode || ""}
+                                title={ZOOM_MODE_TIP}
                                 onChange={(e) => onManualFieldChange(row.id, "zoomMode", e.target.value)}
                                 onBlur={() => onDraftFieldBlur(row.id, "zoomMode")}
                               />
@@ -1036,13 +1063,14 @@ function App() {
                           <input
                             inputMode="numeric"
                             value={draft.zoomMode}
+                            title={ZOOM_MODE_TIP}
                             onChange={(e) => onParsedFieldChange(row.id, "zoomMode", e.target.value)}
                             onBlur={() => onDraftFieldBlur(row.id, "zoomMode")}
                           />
                         </td>
                       </>
                     )}
-                    <td>{formatDuration(row.durationSec)}</td>
+                    <td className={duration.warning ? "duration-warning" : ""}>{duration.text}</td>
                     <td>
                       {row.parseStatus === "failed" ? (
                         row.manualOpen ? (
@@ -1082,12 +1110,16 @@ function App() {
         </section>
       )}
 
-      <section className="error-panel">
-        <h2>错误信息</h2>
-        {!errorLog.length ? (
-          <div className="error-empty">暂无错误</div>
-        ) : (
-          <pre className="error-log">{errorLog.join("\n\n")}</pre>
+      <section className={`error-panel ${showErrorPanel ? "expanded" : ""}`}>
+        <button type="button" className="error-toggle" onClick={() => setShowErrorPanel((prev) => !prev)}>
+          错误信息（{errorLog.length}）{showErrorPanel ? "收起" : "展开"}
+        </button>
+        {showErrorPanel && (
+          !errorLog.length ? (
+            <div className="error-empty">暂无错误</div>
+          ) : (
+            <pre className="error-log">{errorLog.join("\n\n")}</pre>
+          )
         )}
       </section>
 

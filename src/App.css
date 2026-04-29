@@ -195,6 +195,11 @@ tr.danger {
   background: #fee2e2;
 }
 
+.duration-warning {
+  color: #ca8a04;
+  font-weight: 600;
+}
+
 .ok {
   color: #16a34a;
 }
@@ -203,16 +208,27 @@ tr.danger {
   color: #dc2626;
 }
 
-.error-panel h2 {
-  margin: 0 0 8px;
-  font-size: 14px;
+.error-panel {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+  padding: 8px 12px;
 }
 
-.error-panel {
-  flex: 0 0 150px;
+.error-panel.expanded {
+  flex-basis: 150px;
   min-height: 150px;
   max-height: 150px;
-  overflow: hidden;
+}
+
+.error-toggle {
+  width: 100%;
+  text-align: left;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  font-weight: 600;
 }
 
 .error-empty {
