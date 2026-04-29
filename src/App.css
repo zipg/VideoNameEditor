@@ -45,6 +45,16 @@ button:disabled {
   opacity: 0.6;
 }
 
+.danger-btn {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.danger-btn:hover {
+  background: #b91c1c;
+}
+
 .batch-editor,
 .failed-panel,
 .table-wrap,
@@ -73,6 +83,12 @@ button:disabled {
 
 .batch-save-btn {
   white-space: nowrap;
+}
+
+.batch-video-name-input:disabled {
+  background: #f3f4f6;
+  color: #6b7280;
+  cursor: not-allowed;
 }
 
 .row-actions {

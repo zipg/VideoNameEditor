@@ -100,6 +100,22 @@ function trimNum(value: number): string {
   return rounded.toFixed(2).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
 }
 
+function floorToTwoDecimals(value: number): number {
+  return Math.max(0, Math.floor(value * 100) / 100);
+}
+
+function formatDuration(durationSec: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationSec));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(seconds).padStart(2, "0");
+
+  if (hours > 0) return `${String(hours).padStart(2, "0")}:${mm}:${ss}`;
+  return `${mm}:${ss}`;
+}
+
 function parseErrorToText(error?: string): string {
   if (!error) return "未知错误";
 
@@ -169,17 +185,32 @@ function renamedFields(
   };
 }
 
+function clampCutDraft(draft: ManualDraft, field: keyof ManualDraft, durationSec: number): ManualDraft {
+  const normalized = normalizeDraft(draft);
+  if (durationSec <= 0 || (field !== "headCut" && field !== "tailCut")) return normalized;
+
+  const otherField = field === "headCut" ? "tailCut" : "headCut";
+  const current = Number(normalized[field]);
+  const other = Number(normalized[otherField]);
+  const maxValue = floorToTwoDecimals(durationSec - other - 0.01);
+  const clamped = Math.min(current, maxValue);
+
+  return {
+    ...normalized,
+    [field]: trimNum(clamped),
+  };
+}
+
 function App() {
   const [appState, dispatch] = useReducer(reducer, initialState);
   const [rows, setRows] = useState<FileRow[]>([]);
-  const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const [summary, setSummary] = useState<RenameBatchSummary | null>(null);
   const [showBatchEdit, setShowBatchEdit] = useState(false);
   const [batchForm, setBatchForm] = useState({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
   const [showGuardModal, setShowGuardModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [errorLog, setErrorLog] = useState<string[]>([]);
   const pendingFilesRef = useRef<string[] | null>(null);
+  const pendingPickRef = useRef(false);
   const rowsRef = useRef<FileRow[]>([]);
   const guardRef = useRef(appState.guard);
 
@@ -228,8 +259,6 @@ function App() {
     }
 
     dispatch({ type: "MARK_DIRTY", value: false });
-    setSummary(null);
-    setProgress({ current: 0, total: 0 });
     setShowBatchEdit(false);
     setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
   }
@@ -246,6 +275,7 @@ function App() {
 
   async function requestParseInputPaths(paths: string[]) {
     if (hasUnfinishedChanges()) {
+      pendingPickRef.current = false;
       pendingFilesRef.current = paths;
       setShowGuardModal(true);
       return;
@@ -281,6 +311,7 @@ function App() {
       if (!droppedPaths.length) return;
 
       if (hasUnfinishedChanges(rowsRef.current, guardRef.current)) {
+        pendingPickRef.current = false;
         pendingFilesRef.current = droppedPaths;
         setShowGuardModal(true);
         return;
@@ -296,12 +327,7 @@ function App() {
     };
   }, []);
 
-  async function onPickFiles() {
-    if (hasUnfinishedChanges()) {
-      setShowGuardModal(true);
-      return;
-    }
-
+  async function pickFilesFromDialog() {
     try {
       const picked = await open({
         multiple: true,
@@ -315,6 +341,17 @@ function App() {
       appendError("打开文件选择器失败", error);
       window.alert("打开文件选择器失败，请查看下方错误信息。");
     }
+  }
+
+  async function onPickFiles() {
+    if (hasUnfinishedChanges()) {
+      pendingFilesRef.current = null;
+      pendingPickRef.current = true;
+      setShowGuardModal(true);
+      return;
+    }
+
+    await pickFilesFromDialog();
   }
 
   async function onDropFiles(event: React.DragEvent<HTMLDivElement>) {
@@ -350,9 +387,8 @@ function App() {
   function onConfirmClearList() {
     setShowClearModal(false);
     pendingFilesRef.current = null;
+    pendingPickRef.current = false;
     setRows([]);
-    setSummary(null);
-    setProgress({ current: 0, total: 0 });
     setShowBatchEdit(false);
     setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
     setErrorLog([]);
@@ -396,11 +432,11 @@ function App() {
       prev.map((row) => {
         if (row.id !== rowId) return row;
         const draft = draftFromRow(row);
-        const normalizedValue = normalizeNumericField(field, draft[field]);
+        const normalizedDraft = clampCutDraft(draft, field, row.durationSec);
 
         return {
           ...row,
-          manualDraft: { ...draft, [field]: normalizedValue },
+          manualDraft: normalizedDraft,
         };
       }),
     );
@@ -495,14 +531,12 @@ function App() {
     }
 
     dispatch({ type: "RENAME_STARTED" });
-    setProgress({ current: 1, total: 1 });
 
     try {
       const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
         items: [{ id: row.id, sourcePath: row.path, targetFileName }],
       });
       const itemResult = result.results[0];
-      setSummary(result);
       dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
 
       setRows((prev) =>
@@ -581,14 +615,12 @@ function App() {
     }
 
     dispatch({ type: "RENAME_STARTED" });
-    setProgress({ current: 1, total: 1 });
 
     try {
       const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
         items: [{ id: row.id, sourcePath: row.path, targetFileName }],
       });
       const itemResult = result.results[0];
-      setSummary(result);
       dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
 
       setRows((prev) =>
@@ -642,7 +674,21 @@ function App() {
   }
 
   function onBatchFieldBlur(field: "headCut" | "tailCut" | "zoomRatio" | "zoomMode") {
-    setBatchForm((prev) => ({ ...prev, [field]: normalizeNumericField(field, prev[field]) }));
+    const selectedRows = rows.filter((row) => row.selected);
+    const shortestDuration = selectedRows
+      .map((row) => row.durationSec)
+      .filter((duration) => duration > 0)
+      .sort((a, b) => a - b)[0] ?? 0;
+
+    setBatchForm((prev) => {
+      const normalized = clampCutDraft({ videoName: "", ...prev }, field, shortestDuration);
+      return {
+        headCut: normalized.headCut,
+        tailCut: normalized.tailCut,
+        zoomRatio: normalized.zoomRatio,
+        zoomMode: normalized.zoomMode,
+      };
+    });
   }
 
   async function onSaveBatch() {
@@ -672,7 +718,6 @@ function App() {
       zoomRatio: normalizedBatchForm.zoomRatio,
       zoomMode: normalizedBatchForm.zoomMode,
     });
-    dispatch({ type: "RENAME_STARTED" });
 
     const fields = {
       headCut: Number(normalizedBatchForm.headCut),
@@ -681,25 +726,40 @@ function App() {
       zoomMode: Number(normalizedBatchForm.zoomMode) as 1 | 2 | 3 | 4,
     };
 
-    const renameItems: RenameItemInput[] = selectedRows.map((row) => ({
-      id: row.id,
-      sourcePath: row.path,
-      targetFileName: buildTargetName(row, fields),
-    }));
+    const renameItems: RenameItemInput[] = [];
+    let unchangedCount = 0;
 
-    setProgress({ current: 0, total: renameItems.length });
+    for (const row of selectedRows) {
+      const targetFileName = buildTargetName(row, fields);
+      if (targetFileName === row.fileName) {
+        unchangedCount += 1;
+        continue;
+      }
 
-    for (let i = 0; i < renameItems.length; i += 1) {
-      setProgress({ current: i + 1, total: renameItems.length });
+      renameItems.push({
+        id: row.id,
+        sourcePath: row.path,
+        targetFileName,
+      });
     }
+
+    if (!renameItems.length) {
+      dispatch({ type: "MARK_DIRTY", value: false });
+      window.alert(`${unchangedCount} 个视频文件名无变化`);
+      return;
+    }
+
+    dispatch({ type: "RENAME_STARTED" });
 
     try {
       const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
         items: renameItems,
       });
 
-      setSummary(result);
       dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
+      window.alert(
+        `批量修改完成：${result.success} 个成功，${unchangedCount} 个视频文件名无变化，${result.failed} 个失败`,
+      );
 
       setRows((prev) =>
         prev.map((row) => {
@@ -756,7 +816,19 @@ function App() {
       const paths = pendingFilesRef.current;
       pendingFilesRef.current = null;
       await parseInputPaths(paths);
+      return;
     }
+
+    if (pendingPickRef.current) {
+      pendingPickRef.current = false;
+      await pickFilesFromDialog();
+    }
+  }
+
+  function onGuardCancel() {
+    pendingFilesRef.current = null;
+    pendingPickRef.current = false;
+    setShowGuardModal(false);
   }
 
   return (
@@ -796,7 +868,7 @@ function App() {
         <section className="table-wrap">
           <table style={{ tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: "48px" }} />
+              {showBatchEdit && <col style={{ width: "48px" }} />}
               <col style={{ width: "320px" }} />
               <col style={{ width: "96px" }} />
               <col style={{ width: "96px" }} />
@@ -807,7 +879,7 @@ function App() {
             </colgroup>
             <thead>
               <tr>
-                <th>选中</th>
+                {showBatchEdit && <th>选中</th>}
                 <th>视频名</th>
                 <th>头部切除</th>
                 <th>尾部切除</th>
@@ -824,7 +896,7 @@ function App() {
                     <input type="checkbox" checked readOnly />
                   </td>
                   <td>
-                    <input value="保持原名称" disabled className="video-name-input" />
+                    <input value="保持原名称" disabled className="video-name-input batch-video-name-input" />
                   </td>
                   <td>
                     <input
@@ -857,7 +929,7 @@ function App() {
                   <td>-</td>
                   <td>
                     <button type="button" className="batch-save-btn" onClick={onSaveBatch}>
-                      保存修改
+                      应用到所选文件
                     </button>
                   </td>
                 </tr>
@@ -875,13 +947,15 @@ function App() {
                           : ""
                     }
                   >
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={row.selected}
-                        onChange={(e) => onToggleSelect(row.id, e.target.checked)}
-                      />
-                    </td>
+                    {showBatchEdit && (
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={row.selected}
+                          onChange={(e) => onToggleSelect(row.id, e.target.checked)}
+                        />
+                      </td>
+                    )}
                     <td>
                       <input
                         className="video-name-input"
@@ -968,7 +1042,7 @@ function App() {
                         </td>
                       </>
                     )}
-                    <td>{row.durationSec}</td>
+                    <td>{formatDuration(row.durationSec)}</td>
                     <td>
                       {row.parseStatus === "failed" ? (
                         row.manualOpen ? (
@@ -1008,29 +1082,6 @@ function App() {
         </section>
       )}
 
-      <section className="result-panel">
-        <div>
-          进度：{progress.current}/{progress.total}
-        </div>
-        {summary && (
-          <>
-            <div className="ok">{summary.success} 个文件修改成功</div>
-            <div className="err">{summary.failed} 个文件修改失败</div>
-            {summary.failed > 0 && (
-              <ul>
-                {summary.results
-                  .filter((item) => !item.success)
-                  .map((item) => (
-                    <li key={item.id}>
-                      {item.id} - {item.reason}
-                    </li>
-                  ))}
-              </ul>
-            )}
-          </>
-        )}
-      </section>
-
       <section className="error-panel">
         <h2>错误信息</h2>
         {!errorLog.length ? (
@@ -1048,7 +1099,7 @@ function App() {
               <button type="button" onClick={() => setShowClearModal(false)}>
                 我再想想
               </button>
-              <button type="button" onClick={onConfirmClearList}>
+              <button type="button" className="danger-btn" onClick={onConfirmClearList}>
                 放弃修改
               </button>
             </div>
@@ -1061,11 +1112,11 @@ function App() {
           <div className="modal">
             <h3>还有未完成的修改，确认要处理新的文件？</h3>
             <div className="modal-actions">
-              <button type="button" onClick={() => setShowGuardModal(false)}>
+              <button type="button" onClick={onGuardCancel}>
                 我再想想
               </button>
-              <button type="button" onClick={onGuardContinue}>
-                忽略警告
+              <button type="button" className="danger-btn" onClick={onGuardContinue}>
+                放弃修改
               </button>
             </div>
           </div>
