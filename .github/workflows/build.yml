@@ -52,8 +52,24 @@ jobs:
         run: |
           rm -rf artifacts
           mkdir -p artifacts
-          cp src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg artifacts/
-          cp "release/首次运行前先看我.txt" artifacts/
+          dmg_path="$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -n 1)"
+          rw_base="${dmg_path%.dmg}-rw"
+          rw_dmg="${rw_base}.dmg"
+          final_base="${dmg_path%.dmg}-with-readme"
+          final_dmg="${final_base}.dmg"
+          attach_plist="$(mktemp)"
+
+          hdiutil convert "$dmg_path" -format UDRW -o "$rw_base"
+          hdiutil attach "$rw_dmg" -readwrite -noverify -noautoopen -plist > "$attach_plist"
+          mount_point="$(python3 -c 'import plistlib, sys; data = plistlib.load(open(sys.argv[1], "rb")); print(next(entity["mount-point"] for entity in data.get("system-entities", []) if entity.get("mount-point")))' "$attach_plist")"
+
+          cp "release/首次运行前先看我.txt" "$mount_point/"
+          sync
+          hdiutil detach "$mount_point"
+          hdiutil convert "$rw_dmg" -format UDZO -o "$final_base"
+          mv "$final_dmg" "$dmg_path"
+          rm -f "$rw_dmg" "$attach_plist"
+          cp "$dmg_path" artifacts/
 
       - name: Prepare Windows artifacts
         if: startsWith(matrix.target, 'x86_64-pc-windows')

@@ -1,7 +1,47 @@
-# Tauri + React + Typescript
+# VideoNameEditor
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+视频文件名批处理工具，用于解析和批量修改 MP4 文件名中的剪辑参数。
 
-## Recommended IDE Setup
+## 功能
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- 批量拖拽或点击选择 MP4 文件。
+- 从文件名解析视频名、头部切除、尾部切除、放大比例和放大模式。
+- 内置 `ffprobe` 读取视频时长，无需用户额外安装。
+- 支持单个文件修改和批量应用到所选文件。
+- 自动校验头尾切除时长，避免剪辑后时长小于等于 0。
+- 支持 macOS 和 Windows 安装包构建。
+
+## 文件名格式
+
+文件名应符合：
+
+```text
+视频名-头部切除-尾部切除-放大比例-放大模式.mp4
+```
+
+示例：
+
+```text
+渐变暗色003-1-2.11-1.25-1.mp4
+```
+
+放大模式：
+
+- `1`：四面放大
+- `2`：上下放大
+- `3`：向下拉长
+- `4`：向上拉长
+
+## 开发
+
+```bash
+npm install
+npm run tauri dev
+```
+
+## 构建
+
+```bash
+npm run prepare:ffprobe
+npm run tauri build
+```
