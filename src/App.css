@@ -8,15 +8,23 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
 }
 
 .page {
   padding: 20px;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow: hidden;
 }
 
 .toolbar {
@@ -93,6 +101,9 @@ input {
 
 .table-wrap {
   overflow-x: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .table-wrap input:not([type="checkbox"]) {
@@ -181,6 +192,13 @@ tr.danger {
   font-size: 14px;
 }
 
+.error-panel {
+  flex: 0 0 150px;
+  min-height: 150px;
+  max-height: 150px;
+  overflow: hidden;
+}
+
 .error-empty {
   color: #6b7280;
   font-size: 13px;
@@ -188,7 +206,7 @@ tr.danger {
 
 .error-log {
   margin: 0;
-  max-height: 220px;
+  max-height: 96px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;

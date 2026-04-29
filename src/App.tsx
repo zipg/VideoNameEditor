@@ -1,7 +1,8 @@
-import { useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, TauriEvent } from "@tauri-apps/api/event";
 import {
   FileRow,
   ManualDraft,
@@ -13,6 +14,10 @@ import {
 import { reducer, initialState } from "./state/reducer";
 import { validateBatchInput } from "./lib/validators";
 import "./App.css";
+
+type DragDropPayload = {
+  paths?: string[];
+};
 
 function emptyManualDraft(): ManualDraft {
   return {
@@ -145,6 +150,25 @@ function buildTargetPath(sourcePath: string, targetFileName: string): string {
   return index === -1 ? targetFileName : `${sourcePath.slice(0, index + 1)}${targetFileName}`;
 }
 
+function rowBaseVideoName(row: FileRow): string {
+  if (row.manualDraft?.videoName.trim()) return row.manualDraft.videoName.trim();
+  if (row.parsedFields?.videoName.trim()) return row.parsedFields.videoName.trim();
+  return buildFileStem(row.fileName);
+}
+
+function renamedFields(
+  row: FileRow,
+  fields: Pick<RowFields, "headCut" | "tailCut" | "zoomRatio" | "zoomMode"> & Partial<Pick<RowFields, "videoName">>,
+): RowFields {
+  return {
+    videoName: fields.videoName?.trim() || rowBaseVideoName(row),
+    headCut: fields.headCut,
+    tailCut: fields.tailCut,
+    zoomRatio: fields.zoomRatio,
+    zoomMode: fields.zoomMode,
+  };
+}
+
 function App() {
   const [appState, dispatch] = useReducer(reducer, initialState);
   const [rows, setRows] = useState<FileRow[]>([]);
@@ -156,6 +180,16 @@ function App() {
   const [showClearModal, setShowClearModal] = useState(false);
   const [errorLog, setErrorLog] = useState<string[]>([]);
   const pendingFilesRef = useRef<string[] | null>(null);
+  const rowsRef = useRef<FileRow[]>([]);
+  const guardRef = useRef(appState.guard);
+
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  useEffect(() => {
+    guardRef.current = appState.guard;
+  }, [appState.guard]);
 
   const sortedRows = useMemo(
     () => [...rows].sort((a, b) => (a.parseStatus === b.parseStatus ? 0 : a.parseStatus === "failed" ? -1 : 1)),
@@ -201,10 +235,23 @@ function App() {
   }
 
 
-  function hasUnfinishedChanges() {
+  function hasUnfinishedChanges(currentRows = rows, guard = appState.guard) {
     return (
-      appState.guard.hasUnsavedChanges || appState.guard.isRenaming || appState.guard.hasPartialFailure
+      guard.hasUnsavedChanges ||
+      guard.isRenaming ||
+      guard.hasPartialFailure ||
+      currentRows.some((row) => row.modified)
     );
+  }
+
+  async function requestParseInputPaths(paths: string[]) {
+    if (hasUnfinishedChanges()) {
+      pendingFilesRef.current = paths;
+      setShowGuardModal(true);
+      return;
+    }
+
+    await parseInputPaths(paths);
   }
 
   async function parseInputPaths(paths: string[]) {
@@ -226,6 +273,29 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    listen<DragDropPayload>(TauriEvent.DRAG_DROP, (event) => {
+      const droppedPaths = event.payload.paths || [];
+      if (!droppedPaths.length) return;
+
+      if (hasUnfinishedChanges(rowsRef.current, guardRef.current)) {
+        pendingFilesRef.current = droppedPaths;
+        setShowGuardModal(true);
+        return;
+      }
+
+      void parseInputPaths(droppedPaths);
+    }).then((handler) => {
+      unlisten = handler;
+    }).catch((error) => appendError("注册拖拽监听失败", error));
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   async function onPickFiles() {
     if (hasUnfinishedChanges()) {
       setShowGuardModal(true);
@@ -240,7 +310,7 @@ function App() {
       if (!picked) return;
 
       const paths = Array.isArray(picked) ? picked : [picked];
-      await parseInputPaths(paths);
+      await requestParseInputPaths(paths);
     } catch (error) {
       appendError("打开文件选择器失败", error);
       window.alert("打开文件选择器失败，请查看下方错误信息。");
@@ -264,19 +334,13 @@ function App() {
 
     const droppedPaths = [...new Set([...filePaths, ...itemPaths])];
 
-    if (hasUnfinishedChanges()) {
-      pendingFilesRef.current = droppedPaths;
-      setShowGuardModal(true);
-      return;
-    }
-
     if (!droppedPaths.length) {
       appendError("拖拽导入失败", "未能读取拖拽文件路径，请点击拖拽区域或“批量解析”按钮选择文件。");
       window.alert("拖拽导入失败，请点击拖拽区域或“批量解析”按钮。\n详细错误见下方错误信息区。");
       return;
     }
 
-    await parseInputPaths(droppedPaths);
+    await requestParseInputPaths(droppedPaths);
   }
 
   function onClearList() {
@@ -389,38 +453,95 @@ function App() {
     dispatch({ type: "MARK_DIRTY", value: true });
   }
 
-  function onApplyManual(rowId: string) {
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row.id !== rowId || !row.manualDraft) return row;
+  async function onApplyManual(rowId: string) {
+    const row = rows.find((item) => item.id === rowId);
+    if (!row || !row.manualDraft) return;
 
-        const draft = normalizeDraft(row.manualDraft);
-        const error = validateBatchInput(
-          draft.headCut,
-          draft.tailCut,
-          draft.zoomRatio,
-          draft.zoomMode,
-          row.durationSec,
-        );
-        if (error) {
-          window.alert("手动设置参数不合法，请检查输入。\n规则：模式1-4、比例<=2、头尾和<时长");
-          return row;
-        }
+    const draft = normalizeDraft(row.manualDraft);
+    const error = validateBatchInput(draft.headCut, draft.tailCut, draft.zoomRatio, draft.zoomMode, row.durationSec);
+    if (error) {
+      window.alert("手动设置参数不合法，请检查输入。\n规则：模式1-4、比例<=2、头尾和<时长");
+      return;
+    }
 
-        return {
-          ...row,
-          parseStatus: "success",
-          parsedFields: {
-            ...fieldsFromDraft(draft),
-            videoName: draft.videoName.trim() || buildFileStem(row.fileName),
-          },
-          parseError: undefined,
-          manualDraft: undefined,
-          manualOpen: false,
-          modified: false,
-        };
-      }),
-    );
+    const fields = fieldsFromDraft({
+      ...draft,
+      videoName: draft.videoName.trim() || buildFileStem(row.fileName),
+    });
+    const targetFileName = buildTargetName(row, fields);
+
+    if (targetFileName === row.fileName) {
+      setRows((prev) =>
+        prev.map((item) =>
+          item.id === rowId
+            ? {
+                ...item,
+                parseStatus: "success",
+                parsedFields: fields,
+                parseError: undefined,
+                manualDraft: undefined,
+                manualOpen: false,
+                modified: false,
+                renameResult: "success",
+                renameError: undefined,
+              }
+            : item,
+        ),
+      );
+      if (!rows.some((item) => item.id !== rowId && item.modified)) {
+        dispatch({ type: "MARK_DIRTY", value: false });
+      }
+      return;
+    }
+
+    dispatch({ type: "RENAME_STARTED" });
+    setProgress({ current: 1, total: 1 });
+
+    try {
+      const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
+        items: [{ id: row.id, sourcePath: row.path, targetFileName }],
+      });
+      const itemResult = result.results[0];
+      setSummary(result);
+      dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
+
+      setRows((prev) =>
+        prev.map((item) => {
+          if (item.id !== rowId) return item;
+          if (!itemResult?.success) {
+            return {
+              ...item,
+              renameResult: "failed",
+              renameError: itemResult?.reason,
+            };
+          }
+
+          const nextPath = buildTargetPath(item.path, targetFileName);
+          return {
+            ...item,
+            id: nextPath,
+            path: nextPath,
+            fileName: targetFileName,
+            parseStatus: "success",
+            parsedFields: fields,
+            parseError: undefined,
+            warningFlags: [],
+            manualDraft: undefined,
+            manualOpen: false,
+            modified: false,
+            renameResult: "success",
+            renameError: undefined,
+          };
+        }),
+      );
+      if (itemResult?.success && !rows.some((item) => item.id !== rowId && item.modified)) {
+        dispatch({ type: "MARK_DIRTY", value: false });
+      }
+    } catch (error) {
+      appendError("调用 execute_batch_rename 失败", error);
+      dispatch({ type: "RENAME_FINISHED", success: 0, failed: 1 });
+      window.alert("手动应用失败，请查看下方错误信息。");
+    }
   }
 
   async function onSaveRow(rowId: string) {
@@ -517,6 +638,7 @@ function App() {
   function onBatchFieldChange(field: "headCut" | "tailCut" | "zoomRatio" | "zoomMode", value: string) {
     if (!canAcceptNumericInput(field, value)) return;
     setBatchForm((prev) => ({ ...prev, [field]: value }));
+    dispatch({ type: "MARK_DIRTY", value: true });
   }
 
   function onBatchFieldBlur(field: "headCut" | "tailCut" | "zoomRatio" | "zoomMode") {
@@ -583,9 +705,29 @@ function App() {
         prev.map((row) => {
           const matched = result.results.find((item) => item.id === row.id);
           if (!matched) return row;
+          if (matched.success) {
+            const targetFileName = buildTargetName(row, fields);
+            const nextPath = buildTargetPath(row.path, targetFileName);
+            return {
+              ...row,
+              id: nextPath,
+              path: nextPath,
+              fileName: targetFileName,
+              parseStatus: "success",
+              parseError: undefined,
+              warningFlags: [],
+              parsedFields: renamedFields(row, fields),
+              manualDraft: undefined,
+              manualOpen: false,
+              modified: false,
+              renameResult: "success",
+              renameError: undefined,
+            };
+          }
+
           return {
             ...row,
-            renameResult: matched.success ? "success" : "failed",
+            renameResult: "failed",
             renameError: matched.reason,
           };
         }),
@@ -832,7 +974,7 @@ function App() {
                         row.manualOpen ? (
                           <button
                             type="button"
-                            onClick={() => onApplyManual(row.id)}
+                            onClick={() => void onApplyManual(row.id)}
                             disabled={!row.modified}
                           >
                             应用
