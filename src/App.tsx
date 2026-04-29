@@ -24,6 +24,9 @@ function emptyManualDraft(): ManualDraft {
   };
 }
 
+function buildFileStem(fileName: string): string {
+  return fileName.trim().replace(/\.mp4\s*$/i, "");
+}
 function dtoToRow(dto: ParseFileRowDto): FileRow {
   return {
     ...dto,
@@ -50,11 +53,46 @@ function trimNum(value: number): string {
   return rounded.toFixed(2).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
 }
 
+function parseErrorToText(error?: string): string {
+  if (!error) return "未知错误";
+
+  const primary = error.split(" | ")[0].trim();
+
+  switch (primary) {
+    case "cut_exceeds_duration":
+      return "头尾切除时长之和不能大于等于视频总时长（cut_exceeds_duration）";
+    case "mode_out_of_range":
+      return "放大模式必须是 1-4（mode_out_of_range）";
+    case "ratio_out_of_range":
+      return "放大比例必须大于 0 且不超过 2（ratio_out_of_range）";
+    case "head_invalid":
+      return "头部切除数值无效（head_invalid）";
+    case "tail_invalid":
+      return "尾部切除数值无效（tail_invalid）";
+    case "ratio_invalid":
+      return "放大比例数值无效（ratio_invalid）";
+    case "mode_invalid":
+      return "放大模式数值无效（mode_invalid）";
+    case "segment_count_invalid":
+      return "文件名段数不足，格式不符合规则（segment_count_invalid）";
+    case "video_name_invalid":
+      return "视频名为空（video_name_invalid）";
+    case "precision_out_of_range":
+      return "头尾切除和比例最多保留两位小数（precision_out_of_range）";
+    case "not_mp4":
+      return "文件后缀不是 .mp4（not_mp4）";
+    case "cut_negative":
+      return "头部或尾部切除不能为负数（cut_negative）";
+    default:
+      return `${error}`;
+  }
+}
+
 function buildTargetName(
   row: FileRow,
   fields: Pick<RowFields, "headCut" | "tailCut" | "zoomRatio" | "zoomMode">,
 ): string {
-  const stem = row.fileName.replace(/\.mp4$/i, "");
+  const stem = buildFileStem(row.fileName);
   const base = row.parseStatus === "success" && row.parsedFields ? row.parsedFields.videoName : stem;
   return `${base}-${trimNum(fields.headCut)}-${trimNum(fields.tailCut)}-${trimNum(fields.zoomRatio)}-${fields.zoomMode}.mp4`;
 }
@@ -67,11 +105,14 @@ function App() {
   const [showBatchEdit, setShowBatchEdit] = useState(false);
   const [batchForm, setBatchForm] = useState({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
   const [showGuardModal, setShowGuardModal] = useState(false);
+  const [showClearModal, setShowClearModal] = useState(false);
   const [errorLog, setErrorLog] = useState<string[]>([]);
   const pendingFilesRef = useRef<string[] | null>(null);
 
-  const failedRows = useMemo(() => rows.filter((row) => row.parseStatus === "failed"), [rows]);
-  const successRows = useMemo(() => rows.filter((row) => row.parseStatus === "success"), [rows]);
+  const sortedRows = useMemo(
+    () => [...rows].sort((a, b) => (a.parseStatus === b.parseStatus ? 0 : a.parseStatus === "failed" ? -1 : 1)),
+    [rows],
+  );
 
   function appendError(title: string, error: unknown) {
     const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error);
@@ -84,8 +125,25 @@ function App() {
   function resetAfterParse(parsedRows: FileRow[]) {
     setRows(parsedRows);
     const successCount = parsedRows.filter((row) => row.parseStatus === "success").length;
-    const failedCount = parsedRows.length - successCount;
+    const failedRows = parsedRows.filter((row) => row.parseStatus === "failed");
+    const failedCount = failedRows.length;
     window.alert(`文件名解析成功 ${successCount} 个，失败 ${failedCount} 个`);
+
+    const diagnostics = parsedRows.filter((row) => (row.parseError || "").includes("probe_"));
+
+    if (failedRows.length || diagnostics.length) {
+      setErrorLog((prev) => [
+        ...prev,
+        ...failedRows.map(
+          (row) =>
+            `[${new Date().toLocaleString()}] 文件名解析失败\n${row.fileName}\n原因：${parseErrorToText(row.parseError)}`,
+        ),
+        ...diagnostics.map(
+          (row) =>
+            `[${new Date().toLocaleString()}] 时长探测诊断\n${row.fileName}\n详情：${row.parseError}`,
+        ),
+      ]);
+    }
 
     dispatch({ type: "MARK_DIRTY", value: false });
     setSummary(null);
@@ -102,7 +160,8 @@ function App() {
   }
 
   async function parseInputPaths(paths: string[]) {
-    const mp4Paths = paths.filter((p) => p.toLowerCase().endsWith(".mp4"));
+    const normalizedPaths = paths.map((p) => p.trim()).filter(Boolean);
+    const mp4Paths = normalizedPaths.filter((p) => p.toLowerCase().endsWith(".mp4"));
     if (!mp4Paths.length) {
       appendError("未找到可解析的 MP4 文件", "请确认选择或拖拽的是 .mp4 文件");
       return;
@@ -142,9 +201,20 @@ function App() {
 
   async function onDropFiles(event: React.DragEvent<HTMLDivElement>) {
     event.preventDefault();
-    const droppedPaths = Array.from(event.dataTransfer.files || [])
+
+    const filePaths = Array.from(event.dataTransfer.files || [])
       .map((file) => (file as File & { path?: string }).path)
-      .filter(Boolean) as string[];
+      .filter((path): path is string => !!path);
+
+    const itemPaths = Array.from(event.dataTransfer.items || [])
+      .map((item) => {
+        if (item.kind !== "file") return undefined;
+        const file = item.getAsFile();
+        return (file as File & { path?: string } | null)?.path;
+      })
+      .filter((path): path is string => !!path);
+
+    const droppedPaths = [...new Set([...filePaths, ...itemPaths])];
 
     if (hasUnfinishedChanges()) {
       pendingFilesRef.current = droppedPaths;
@@ -153,12 +223,28 @@ function App() {
     }
 
     if (!droppedPaths.length) {
-      appendError("拖拽导入失败", "未能读取拖拽文件路径，请使用“批量解析”按钮选择文件。");
-      window.alert("拖拽导入失败，请使用“批量解析”按钮。\n详细错误见下方错误信息区。");
+      appendError("拖拽导入失败", "未能读取拖拽文件路径，请点击拖拽区域或“批量解析”按钮选择文件。");
+      window.alert("拖拽导入失败，请点击拖拽区域或“批量解析”按钮。\n详细错误见下方错误信息区。");
       return;
     }
 
     await parseInputPaths(droppedPaths);
+  }
+
+  function onClearList() {
+    setShowClearModal(true);
+  }
+
+  function onConfirmClearList() {
+    setShowClearModal(false);
+    pendingFilesRef.current = null;
+    setRows([]);
+    setSummary(null);
+    setProgress({ current: 0, total: 0 });
+    setShowBatchEdit(false);
+    setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
+    setErrorLog([]);
+    dispatch({ type: "MARK_DIRTY", value: false });
   }
 
   function onManualOpen(rowId: string) {
@@ -189,6 +275,59 @@ function App() {
     dispatch({ type: "MARK_DIRTY", value: true });
   }
 
+  function onVideoNameChange(rowId: string, value: string) {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId) return row;
+
+        if (row.parseStatus === "success" && row.parsedFields) {
+          return {
+            ...row,
+            parsedFields: {
+              ...row.parsedFields,
+              videoName: value,
+            },
+            modified: true,
+          };
+        }
+
+        return {
+          ...row,
+          manualDraft: { ...(row.manualDraft || emptyManualDraft()), videoName: value },
+          modified: true,
+        };
+      }),
+    );
+    dispatch({ type: "MARK_DIRTY", value: true });
+  }
+
+  function onParsedFieldChange(
+    rowId: string,
+    field: "headCut" | "tailCut" | "zoomRatio" | "zoomMode",
+    value: string,
+  ) {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId || row.parseStatus !== "success" || !row.parsedFields) return row;
+
+        const next =
+          field === "zoomMode"
+            ? Math.max(1, Math.min(4, Number(value) || row.parsedFields.zoomMode))
+            : Number(value);
+
+        return {
+          ...row,
+          parsedFields: {
+            ...row.parsedFields,
+            [field]: next,
+          },
+          modified: true,
+        };
+      }),
+    );
+    dispatch({ type: "MARK_DIRTY", value: true });
+  }
+
   function onApplyManual(rowId: string) {
     setRows((prev) =>
       prev.map((row) => {
@@ -202,7 +341,7 @@ function App() {
           draft.zoomMode,
           row.durationSec,
         );
-        if (error || !draft.videoName.trim()) {
+        if (error) {
           window.alert("手动设置参数不合法，请检查输入。\n规则：模式1-4、比例<=2、头尾和<时长");
           return row;
         }
@@ -210,7 +349,10 @@ function App() {
         return {
           ...row,
           parseStatus: "success",
-          parsedFields: fieldsFromDraft(draft),
+          parsedFields: {
+            ...fieldsFromDraft(draft),
+            videoName: draft.videoName.trim() || buildFileStem(row.fileName),
+          },
           parseError: undefined,
           manualOpen: false,
         };
@@ -219,7 +361,7 @@ function App() {
   }
 
   function onBatchEdit() {
-    setShowBatchEdit(true);
+    setShowBatchEdit((prev) => !prev);
     setRows((prev) => prev.map((row) => ({ ...row, selected: true })));
   }
 
@@ -324,108 +466,42 @@ function App() {
         <button type="button" onClick={onBatchEdit} disabled={!rows.length}>
           批量修改
         </button>
+        <button type="button" onClick={onClearList} disabled={!rows.length}>
+          清空列表
+        </button>
       </section>
-
-      {showBatchEdit && (
-        <section className="batch-editor">
-          <div className="batch-grid">
-            <label>
-              视频名
-              <input value="保持原名称" disabled />
-            </label>
-            <label>
-              头部切除
-              <input
-                value={batchForm.headCut}
-                onChange={(e) => setBatchForm((v) => ({ ...v, headCut: e.target.value }))}
-              />
-            </label>
-            <label>
-              尾部切除
-              <input
-                value={batchForm.tailCut}
-                onChange={(e) => setBatchForm((v) => ({ ...v, tailCut: e.target.value }))}
-              />
-            </label>
-            <label>
-              放大比例
-              <input
-                value={batchForm.zoomRatio}
-                onChange={(e) => setBatchForm((v) => ({ ...v, zoomRatio: e.target.value }))}
-              />
-            </label>
-            <label>
-              放大模式
-              <input
-                value={batchForm.zoomMode}
-                onChange={(e) => setBatchForm((v) => ({ ...v, zoomMode: e.target.value }))}
-              />
-            </label>
-          </div>
-          <button type="button" onClick={onSaveBatch}>
-            保存修改
-          </button>
-        </section>
-      )}
 
       <section
         className="dropzone"
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDropFiles}
-        role="presentation"
+        onClick={onPickFiles}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            void onPickFiles();
+          }
+        }}
+        role="button"
+        tabIndex={0}
       >
-        拖拽 MP4 文件到这里
+        拖拽 MP4 文件到这里，或点击选择文件
       </section>
 
-      {!!failedRows.length && (
-        <section className="failed-panel">
-          <h2>解析失败（需处理）</h2>
-          {failedRows.map((row) => (
-            <div key={row.id} className="row-failed">
-              {!row.manualOpen ? (
-                <button type="button" onClick={() => onManualOpen(row.id)}>
-                  解析失败，点击手动设置（{row.fileName}）
-                </button>
-              ) : (
-                <div className="manual-editor">
-                  <input
-                    placeholder="视频名"
-                    value={row.manualDraft?.videoName || ""}
-                    onChange={(e) => onManualFieldChange(row.id, "videoName", e.target.value)}
-                  />
-                  <input
-                    placeholder="头部切除"
-                    value={row.manualDraft?.headCut || ""}
-                    onChange={(e) => onManualFieldChange(row.id, "headCut", e.target.value)}
-                  />
-                  <input
-                    placeholder="尾部切除"
-                    value={row.manualDraft?.tailCut || ""}
-                    onChange={(e) => onManualFieldChange(row.id, "tailCut", e.target.value)}
-                  />
-                  <input
-                    placeholder="放大比例"
-                    value={row.manualDraft?.zoomRatio || ""}
-                    onChange={(e) => onManualFieldChange(row.id, "zoomRatio", e.target.value)}
-                  />
-                  <input
-                    placeholder="放大模式"
-                    value={row.manualDraft?.zoomMode || ""}
-                    onChange={(e) => onManualFieldChange(row.id, "zoomMode", e.target.value)}
-                  />
-                  <button type="button" onClick={() => onApplyManual(row.id)}>
-                    应用
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
-        </section>
-      )}
 
-      {!!successRows.length && (
+      {!!rows.length && (
         <section className="table-wrap">
-          <table>
+          <table style={{ tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: "48px" }} />
+              <col style={{ width: "320px" }} />
+              <col style={{ width: "96px" }} />
+              <col style={{ width: "96px" }} />
+              <col style={{ width: "96px" }} />
+              <col style={{ width: "96px" }} />
+              <col style={{ width: "96px" }} />
+              <col style={{ width: "112px" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>选中</th>
@@ -439,7 +515,47 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => {
+              {showBatchEdit && (
+                <tr className="batch-inline-row">
+                  <td>
+                    <input type="checkbox" checked readOnly />
+                  </td>
+                  <td>
+                    <input value="保持原名称" disabled className="video-name-input" />
+                  </td>
+                  <td>
+                    <input
+                      value={batchForm.headCut}
+                      onChange={(e) => setBatchForm((v) => ({ ...v, headCut: e.target.value }))}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      value={batchForm.tailCut}
+                      onChange={(e) => setBatchForm((v) => ({ ...v, tailCut: e.target.value }))}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      value={batchForm.zoomRatio}
+                      onChange={(e) => setBatchForm((v) => ({ ...v, zoomRatio: e.target.value }))}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      value={batchForm.zoomMode}
+                      onChange={(e) => setBatchForm((v) => ({ ...v, zoomMode: e.target.value }))}
+                    />
+                  </td>
+                  <td>-</td>
+                  <td>
+                    <button type="button" className="batch-save-btn" onClick={onSaveBatch}>
+                      保存修改
+                    </button>
+                  </td>
+                </tr>
+              )}
+              {sortedRows.map((row) => {
                 const fields = row.parsedFields;
                 return (
                   <tr
@@ -459,16 +575,101 @@ function App() {
                         onChange={(e) => onToggleSelect(row.id, e.target.checked)}
                       />
                     </td>
-                    <td>{fields?.videoName || "-"}</td>
-                    <td>{fields?.headCut ?? "-"}</td>
-                    <td>{fields?.tailCut ?? "-"}</td>
-                    <td>{fields?.zoomRatio ?? "-"}</td>
-                    <td>{fields?.zoomMode ?? "-"}</td>
+                    <td>
+                      <input
+                        className="video-name-input"
+                        value={
+                          row.parseStatus === "success"
+                            ? row.parsedFields?.videoName || buildFileStem(row.fileName)
+                            : row.manualDraft?.videoName || buildFileStem(row.fileName)
+                        }
+                        onChange={(e) => onVideoNameChange(row.id, e.target.value)}
+                      />
+                    </td>
+                    {row.parseStatus === "failed" ? (
+                      row.manualOpen ? (
+                        <>
+                          <td colSpan={4}>
+                            <div className="manual-editor">
+                              <input
+                                placeholder="头部切除"
+                                value={row.manualDraft?.headCut || ""}
+                                onChange={(e) => onManualFieldChange(row.id, "headCut", e.target.value)}
+                              />
+                              <input
+                                placeholder="尾部切除"
+                                value={row.manualDraft?.tailCut || ""}
+                                onChange={(e) => onManualFieldChange(row.id, "tailCut", e.target.value)}
+                              />
+                              <input
+                                placeholder="放大比例"
+                                value={row.manualDraft?.zoomRatio || ""}
+                                onChange={(e) => onManualFieldChange(row.id, "zoomRatio", e.target.value)}
+                              />
+                              <input
+                                placeholder="放大模式"
+                                value={row.manualDraft?.zoomMode || ""}
+                                onChange={(e) => onManualFieldChange(row.id, "zoomMode", e.target.value)}
+                              />
+                            </div>
+                          </td>
+                        </>
+                      ) : (
+                        <td colSpan={4}>
+                          <button type="button" onClick={() => onManualOpen(row.id)} style={{ width: "100%" }}>
+                            文件名解析失败，请手动设置
+                          </button>
+                        </td>
+                      )
+                    ) : (
+                      <>
+                        <td>
+                          <input
+                            value={fields?.headCut ?? ""}
+                            onChange={(e) => onParsedFieldChange(row.id, "headCut", e.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={fields?.tailCut ?? ""}
+                            onChange={(e) => onParsedFieldChange(row.id, "tailCut", e.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={fields?.zoomRatio ?? ""}
+                            onChange={(e) => onParsedFieldChange(row.id, "zoomRatio", e.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            value={fields?.zoomMode ?? ""}
+                            onChange={(e) => onParsedFieldChange(row.id, "zoomMode", e.target.value)}
+                          />
+                        </td>
+                      </>
+                    )}
                     <td>{row.durationSec}</td>
                     <td>
-                      <button type="button" onClick={() => onReveal(row.path)}>
-                        定位文件
-                      </button>
+                      {row.parseStatus === "failed" ? (
+                        row.manualOpen ? (
+                          <button
+                            type="button"
+                            onClick={() => onApplyManual(row.id)}
+                            disabled={!row.modified}
+                          >
+                            应用
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => onReveal(row.path)}>
+                            定位
+                          </button>
+                        )
+                      ) : (
+                        <button type="button" onClick={() => onReveal(row.path)}>
+                          定位
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -509,6 +710,22 @@ function App() {
           <pre className="error-log">{errorLog.join("\n\n")}</pre>
         )}
       </section>
+
+      {showClearModal && (
+        <div className="modal-mask">
+          <div className="modal">
+            <h3>确认要清空当前列表并放弃本轮修改？</h3>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setShowClearModal(false)}>
+                我再想想
+              </button>
+              <button type="button" onClick={onConfirmClearList}>
+                放弃修改
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showGuardModal && (
         <div className="modal-mask">

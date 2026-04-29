@@ -1,4 +1,4 @@
-use usersstaffvideo_name_lib::validator::validate_fields;
+use video_name_editor_lib::validator::validate_fields;
 
 #[test]
 fn reject_ratio_over_2() {

@@ -1,4 +1,4 @@
-use usersstaffvideo_name_lib::probe::parse_duration_stdout;
+use video_name_editor_lib::probe::parse_duration_stdout;
 
 #[test]
 fn parse_duration_stdout_ok() {

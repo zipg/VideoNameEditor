@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    usersstaffvideo_name_lib::run()
+    video_name_editor_lib::run()
 }

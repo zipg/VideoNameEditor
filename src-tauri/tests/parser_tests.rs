@@ -1,4 +1,4 @@
-use usersstaffvideo_name_lib::parser::parse_filename;
+use video_name_editor_lib::parser::parse_filename;
 
 #[test]
 fn parse_standard_filename_success() {
@@ -12,10 +12,11 @@ fn parse_standard_filename_success() {
 }
 
 #[test]
-fn parse_name_with_hyphen_warns() {
-    let result = parse_filename("我的-素材-0.5-1-1.2-2.mp4", 100.0).unwrap();
-    assert_eq!(result.video_name, "我的-素材");
-    assert!(result
-        .warnings
-        .contains(&"name_contains_hyphen".to_string()));
+fn parse_mode_with_trailing_space_success() {
+    let result = parse_filename("渐变暗色003-1-2.11-1.25-1 .mp4", 30.0).unwrap();
+    assert_eq!(result.video_name, "渐变暗色003");
+    assert_eq!(result.head_cut, 1.0);
+    assert_eq!(result.tail_cut, 2.11);
+    assert_eq!(result.zoom_ratio, 1.25);
+    assert_eq!(result.zoom_mode, 1);
 }

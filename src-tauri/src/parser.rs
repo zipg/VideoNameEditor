@@ -14,10 +14,10 @@ pub fn parse_filename(file_name: &str, duration_sec: f64) -> Result<ParsedFields
         return Err("segment_count_invalid".into());
     }
 
-    let head_raw = parts[parts.len() - 4];
-    let tail_raw = parts[parts.len() - 3];
-    let ratio_raw = parts[parts.len() - 2];
-    let mode_raw = parts[parts.len() - 1];
+    let head_raw = parts[parts.len() - 4].trim();
+    let tail_raw = parts[parts.len() - 3].trim();
+    let ratio_raw = parts[parts.len() - 2].trim();
+    let mode_raw = parts[parts.len() - 1].trim();
 
     if !has_max_two_decimals(head_raw)
         || !has_max_two_decimals(tail_raw)
@@ -32,7 +32,7 @@ pub fn parse_filename(file_name: &str, duration_sec: f64) -> Result<ParsedFields
     let head = head_raw.parse::<f64>().map_err(|_| "head_invalid")?;
 
     let video_name = parts[..parts.len() - 4].join("-");
-    if video_name.is_empty() {
+    if video_name.trim().is_empty() {
         return Err("video_name_invalid".into());
     }
 
@@ -50,7 +50,7 @@ pub fn parse_filename(file_name: &str, duration_sec: f64) -> Result<ParsedFields
     if head < 0.0 || tail < 0.0 {
         return Err("cut_negative".into());
     }
-    if head + tail >= duration_sec {
+    if duration_sec > 0.0 && head + tail >= duration_sec {
         return Err("cut_exceeds_duration".into());
     }
 

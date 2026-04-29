@@ -1,4 +1,4 @@
-use usersstaffvideo_name_lib::rename::build_target_name;
+use video_name_editor_lib::rename::build_target_name;
 
 #[test]
 fn build_replace_name_for_parsed_success() {
