@@ -197,7 +197,6 @@ tr.danger {
 
 .duration-warning {
   color: #ca8a04;
-  font-weight: 600;
 }
 
 .ok {
@@ -210,6 +209,7 @@ tr.danger {
 
 .error-panel {
   flex: 0 0 auto;
+  margin-top: auto;
   min-height: 0;
   max-height: none;
   overflow: hidden;

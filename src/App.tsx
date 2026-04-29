@@ -123,17 +123,18 @@ function draftNumber(value: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function durationChange(row: FileRow, draft: ManualDraft): { text: string; warning: boolean } {
+function durationChange(row: FileRow, draft: ManualDraft): { original: string; edited: string | null; warning: boolean } {
   const original = formatDuration(row.durationSec);
   const headCut = Math.max(0, draftNumber(draft.headCut, 0));
   const tailCut = Math.max(0, draftNumber(draft.tailCut, 0));
   const cutTotal = headCut + tailCut;
 
-  if (cutTotal <= 0) return { text: `${original} → /`, warning: false };
+  if (cutTotal <= 0) return { original, edited: null, warning: false };
 
   const editedDuration = Math.max(0, row.durationSec - cutTotal);
   return {
-    text: `${original} → ${formatDuration(editedDuration)}`,
+    original,
+    edited: formatDuration(editedDuration),
     warning: editedDuration < 1,
   };
 }
@@ -1070,7 +1071,15 @@ function App() {
                         </td>
                       </>
                     )}
-                    <td className={duration.warning ? "duration-warning" : ""}>{duration.text}</td>
+                    <td>
+                      <span>{duration.original}</span>
+                      <span> → </span>
+                      {duration.edited ? (
+                        <span className={duration.warning ? "duration-warning" : ""}>{duration.edited}</span>
+                      ) : (
+                        <span>/</span>
+                      )}
+                    </td>
                     <td>
                       {row.parseStatus === "failed" ? (
                         row.manualOpen ? (
