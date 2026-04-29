@@ -20,6 +20,15 @@ fn ffprobe_candidates() -> Vec<PathBuf> {
         }
     }
 
+    if let Some(target) = host_target_triple() {
+        let sidecar_name = if cfg!(windows) {
+            format!("ffprobe-{target}.exe")
+        } else {
+            format!("ffprobe-{target}")
+        };
+        candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join(sidecar_name));
+    }
+
     candidates.extend([
         PathBuf::from("/opt/homebrew/bin/ffprobe"),
         PathBuf::from("/usr/local/bin/ffprobe"),
@@ -27,6 +36,18 @@ fn ffprobe_candidates() -> Vec<PathBuf> {
     ]);
 
     candidates
+}
+
+fn host_target_triple() -> Option<&'static str> {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        Some("aarch64-apple-darwin")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        Some("x86_64-apple-darwin")
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        Some("x86_64-pc-windows-msvc")
+    } else {
+        None
+    }
 }
 
 pub fn probe_duration(path: &str) -> Result<f64, String> {

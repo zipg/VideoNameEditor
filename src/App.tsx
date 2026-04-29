@@ -38,13 +38,55 @@ function dtoToRow(dto: ParseFileRowDto): FileRow {
 }
 
 function fieldsFromDraft(draft: ManualDraft): RowFields {
+  const normalized = normalizeDraft(draft);
+  return {
+    videoName: normalized.videoName,
+    headCut: Number(normalized.headCut),
+    tailCut: Number(normalized.tailCut),
+    zoomRatio: Number(normalized.zoomRatio),
+    zoomMode: Number(normalized.zoomMode) as 1 | 2 | 3 | 4,
+  };
+}
+
+function draftFromRow(row: FileRow): ManualDraft {
+  if (row.manualDraft) return row.manualDraft;
+  if (row.parsedFields) {
+    return {
+      videoName: row.parsedFields.videoName,
+      headCut: String(row.parsedFields.headCut),
+      tailCut: String(row.parsedFields.tailCut),
+      zoomRatio: String(row.parsedFields.zoomRatio),
+      zoomMode: String(row.parsedFields.zoomMode),
+    };
+  }
+  return {
+    ...emptyManualDraft(),
+    videoName: buildFileStem(row.fileName),
+  };
+}
+
+function normalizeDraft(draft: ManualDraft): ManualDraft {
   return {
     videoName: draft.videoName,
-    headCut: Number(draft.headCut),
-    tailCut: Number(draft.tailCut),
-    zoomRatio: Number(draft.zoomRatio),
-    zoomMode: Number(draft.zoomMode) as 1 | 2 | 3 | 4,
+    headCut: normalizeNumericField("headCut", draft.headCut),
+    tailCut: normalizeNumericField("tailCut", draft.tailCut),
+    zoomRatio: normalizeNumericField("zoomRatio", draft.zoomRatio),
+    zoomMode: normalizeNumericField("zoomMode", draft.zoomMode),
   };
+}
+
+function normalizeNumericField(field: keyof ManualDraft, value: string): string {
+  const trimmed = value.trim();
+  const isIncompleteDecimal = trimmed === ".";
+  if (field === "headCut" || field === "tailCut") return trimmed && !isIncompleteDecimal ? trimmed : "0";
+  if (field === "zoomRatio" || field === "zoomMode") return trimmed && !isIncompleteDecimal ? trimmed : "1";
+  return value;
+}
+
+function canAcceptNumericInput(field: keyof ManualDraft, value: string): boolean {
+  if (field === "videoName") return true;
+  if (field === "zoomMode") return value === "" || /^[1-4]$/.test(value);
+  return value === "" || /^\d*(\.\d{0,2})?$/.test(value);
 }
 
 function trimNum(value: number): string {
@@ -90,11 +132,17 @@ function parseErrorToText(error?: string): string {
 
 function buildTargetName(
   row: FileRow,
-  fields: Pick<RowFields, "headCut" | "tailCut" | "zoomRatio" | "zoomMode">,
+  fields: Pick<RowFields, "headCut" | "tailCut" | "zoomRatio" | "zoomMode"> & Partial<Pick<RowFields, "videoName">>,
 ): string {
   const stem = buildFileStem(row.fileName);
-  const base = row.parseStatus === "success" && row.parsedFields ? row.parsedFields.videoName : stem;
+  const base = fields.videoName ?? (row.parseStatus === "success" && row.parsedFields ? row.parsedFields.videoName : stem);
   return `${base}-${trimNum(fields.headCut)}-${trimNum(fields.tailCut)}-${trimNum(fields.zoomRatio)}-${fields.zoomMode}.mp4`;
+}
+
+function buildTargetPath(sourcePath: string, targetFileName: string): string {
+  const separator = sourcePath.includes("\\") ? "\\" : "/";
+  const index = sourcePath.lastIndexOf(separator);
+  return index === -1 ? targetFileName : `${sourcePath.slice(0, index + 1)}${targetFileName}`;
 }
 
 function App() {
@@ -262,6 +310,8 @@ function App() {
   }
 
   function onManualFieldChange(rowId: string, field: keyof ManualDraft, value: string) {
+    if (!canAcceptNumericInput(field, value)) return;
+
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== rowId) return row;
@@ -275,18 +325,33 @@ function App() {
     dispatch({ type: "MARK_DIRTY", value: true });
   }
 
+  function onDraftFieldBlur(rowId: string, field: keyof ManualDraft) {
+    if (field === "videoName") return;
+
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId) return row;
+        const draft = draftFromRow(row);
+        const normalizedValue = normalizeNumericField(field, draft[field]);
+
+        return {
+          ...row,
+          manualDraft: { ...draft, [field]: normalizedValue },
+        };
+      }),
+    );
+  }
+
   function onVideoNameChange(rowId: string, value: string) {
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== rowId) return row;
 
         if (row.parseStatus === "success" && row.parsedFields) {
+          const draft = draftFromRow(row);
           return {
             ...row,
-            parsedFields: {
-              ...row.parsedFields,
-              videoName: value,
-            },
+            manualDraft: { ...draft, videoName: value },
             modified: true,
           };
         }
@@ -306,21 +371,17 @@ function App() {
     field: "headCut" | "tailCut" | "zoomRatio" | "zoomMode",
     value: string,
   ) {
+    if (!canAcceptNumericInput(field, value)) return;
+
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== rowId || row.parseStatus !== "success" || !row.parsedFields) return row;
 
-        const next =
-          field === "zoomMode"
-            ? Math.max(1, Math.min(4, Number(value) || row.parsedFields.zoomMode))
-            : Number(value);
+        const draft = draftFromRow(row);
 
         return {
           ...row,
-          parsedFields: {
-            ...row.parsedFields,
-            [field]: next,
-          },
+          manualDraft: { ...draft, [field]: value },
           modified: true,
         };
       }),
@@ -333,7 +394,7 @@ function App() {
       prev.map((row) => {
         if (row.id !== rowId || !row.manualDraft) return row;
 
-        const draft = row.manualDraft;
+        const draft = normalizeDraft(row.manualDraft);
         const error = validateBatchInput(
           draft.headCut,
           draft.tailCut,
@@ -354,10 +415,94 @@ function App() {
             videoName: draft.videoName.trim() || buildFileStem(row.fileName),
           },
           parseError: undefined,
+          manualDraft: undefined,
           manualOpen: false,
+          modified: false,
         };
       }),
     );
+  }
+
+  async function onSaveRow(rowId: string) {
+    const row = rows.find((item) => item.id === rowId);
+    if (!row || row.parseStatus !== "success") return;
+
+    const draft = normalizeDraft(draftFromRow(row));
+    const error = validateBatchInput(draft.headCut, draft.tailCut, draft.zoomRatio, draft.zoomMode, row.durationSec);
+    if (error) {
+      window.alert(`单行参数校验失败: ${error}`);
+      return;
+    }
+
+    const fields = fieldsFromDraft({
+      ...draft,
+      videoName: draft.videoName.trim() || buildFileStem(row.fileName),
+    });
+    const targetFileName = buildTargetName(row, fields);
+
+    if (targetFileName === row.fileName) {
+      setRows((prev) =>
+        prev.map((item) =>
+          item.id === rowId
+            ? {
+                ...item,
+                parsedFields: fields,
+                manualDraft: undefined,
+                modified: false,
+              }
+            : item,
+        ),
+      );
+      if (!rows.some((item) => item.id !== rowId && item.modified)) {
+        dispatch({ type: "MARK_DIRTY", value: false });
+      }
+      return;
+    }
+
+    dispatch({ type: "RENAME_STARTED" });
+    setProgress({ current: 1, total: 1 });
+
+    try {
+      const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
+        items: [{ id: row.id, sourcePath: row.path, targetFileName }],
+      });
+      const itemResult = result.results[0];
+      setSummary(result);
+      dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
+
+      setRows((prev) =>
+        prev.map((item) => {
+          if (item.id !== rowId) return item;
+          if (!itemResult?.success) {
+            return {
+              ...item,
+              renameResult: "failed",
+              renameError: itemResult?.reason,
+            };
+          }
+
+          const nextPath = buildTargetPath(item.path, targetFileName);
+          return {
+            ...item,
+            id: nextPath,
+            path: nextPath,
+            fileName: targetFileName,
+            parsedFields: fields,
+            manualDraft: undefined,
+            modified: false,
+            renameResult: "success",
+            renameError: undefined,
+          };
+        }),
+      );
+      if (itemResult?.success && !rows.some((item) => item.id !== rowId && item.modified)) {
+        dispatch({ type: "MARK_DIRTY", value: false });
+      }
+    } catch (error) {
+      appendError("调用 execute_batch_rename 失败", error);
+      dispatch({ type: "RENAME_FINISHED", success: 0, failed: 1 });
+      window.alert("单行保存失败，请查看下方错误信息。");
+    }
   }
 
   function onBatchEdit() {
@@ -369,18 +514,28 @@ function App() {
     setRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, selected: value } : row)));
   }
 
+  function onBatchFieldChange(field: "headCut" | "tailCut" | "zoomRatio" | "zoomMode", value: string) {
+    if (!canAcceptNumericInput(field, value)) return;
+    setBatchForm((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function onBatchFieldBlur(field: "headCut" | "tailCut" | "zoomRatio" | "zoomMode") {
+    setBatchForm((prev) => ({ ...prev, [field]: normalizeNumericField(field, prev[field]) }));
+  }
+
   async function onSaveBatch() {
     if (!showBatchEdit) return;
 
     const selectedRows = rows.filter((row) => row.selected);
     if (!selectedRows.length) return;
+    const normalizedBatchForm = normalizeDraft({ videoName: "", ...batchForm });
 
     for (const row of selectedRows) {
       const error = validateBatchInput(
-        batchForm.headCut,
-        batchForm.tailCut,
-        batchForm.zoomRatio,
-        batchForm.zoomMode,
+        normalizedBatchForm.headCut,
+        normalizedBatchForm.tailCut,
+        normalizedBatchForm.zoomRatio,
+        normalizedBatchForm.zoomMode,
         row.durationSec,
       );
       if (error) {
@@ -389,13 +544,19 @@ function App() {
       }
     }
 
+    setBatchForm({
+      headCut: normalizedBatchForm.headCut,
+      tailCut: normalizedBatchForm.tailCut,
+      zoomRatio: normalizedBatchForm.zoomRatio,
+      zoomMode: normalizedBatchForm.zoomMode,
+    });
     dispatch({ type: "RENAME_STARTED" });
 
     const fields = {
-      headCut: Number(batchForm.headCut),
-      tailCut: Number(batchForm.tailCut),
-      zoomRatio: Number(batchForm.zoomRatio),
-      zoomMode: Number(batchForm.zoomMode) as 1 | 2 | 3 | 4,
+      headCut: Number(normalizedBatchForm.headCut),
+      tailCut: Number(normalizedBatchForm.tailCut),
+      zoomRatio: Number(normalizedBatchForm.zoomRatio),
+      zoomMode: Number(normalizedBatchForm.zoomMode) as 1 | 2 | 3 | 4,
     };
 
     const renameItems: RenameItemInput[] = selectedRows.map((row) => ({
@@ -526,25 +687,29 @@ function App() {
                   <td>
                     <input
                       value={batchForm.headCut}
-                      onChange={(e) => setBatchForm((v) => ({ ...v, headCut: e.target.value }))}
+                      onChange={(e) => onBatchFieldChange("headCut", e.target.value)}
+                      onBlur={() => onBatchFieldBlur("headCut")}
                     />
                   </td>
                   <td>
                     <input
                       value={batchForm.tailCut}
-                      onChange={(e) => setBatchForm((v) => ({ ...v, tailCut: e.target.value }))}
+                      onChange={(e) => onBatchFieldChange("tailCut", e.target.value)}
+                      onBlur={() => onBatchFieldBlur("tailCut")}
                     />
                   </td>
                   <td>
                     <input
                       value={batchForm.zoomRatio}
-                      onChange={(e) => setBatchForm((v) => ({ ...v, zoomRatio: e.target.value }))}
+                      onChange={(e) => onBatchFieldChange("zoomRatio", e.target.value)}
+                      onBlur={() => onBatchFieldBlur("zoomRatio")}
                     />
                   </td>
                   <td>
                     <input
                       value={batchForm.zoomMode}
-                      onChange={(e) => setBatchForm((v) => ({ ...v, zoomMode: e.target.value }))}
+                      onChange={(e) => onBatchFieldChange("zoomMode", e.target.value)}
+                      onBlur={() => onBatchFieldBlur("zoomMode")}
                     />
                   </td>
                   <td>-</td>
@@ -556,14 +721,14 @@ function App() {
                 </tr>
               )}
               {sortedRows.map((row) => {
-                const fields = row.parsedFields;
+                const draft = draftFromRow(row);
                 return (
                   <tr
                     key={row.id}
                     className={
                       row.parseStatus === "failed"
                         ? "danger"
-                        : row.warningFlags.includes("name_contains_hyphen")
+                        : row.modified
                           ? "warn"
                           : ""
                     }
@@ -580,7 +745,7 @@ function App() {
                         className="video-name-input"
                         value={
                           row.parseStatus === "success"
-                            ? row.parsedFields?.videoName || buildFileStem(row.fileName)
+                            ? draft.videoName || buildFileStem(row.fileName)
                             : row.manualDraft?.videoName || buildFileStem(row.fileName)
                         }
                         onChange={(e) => onVideoNameChange(row.id, e.target.value)}
@@ -595,21 +760,25 @@ function App() {
                                 placeholder="头部切除"
                                 value={row.manualDraft?.headCut || ""}
                                 onChange={(e) => onManualFieldChange(row.id, "headCut", e.target.value)}
+                                onBlur={() => onDraftFieldBlur(row.id, "headCut")}
                               />
                               <input
                                 placeholder="尾部切除"
                                 value={row.manualDraft?.tailCut || ""}
                                 onChange={(e) => onManualFieldChange(row.id, "tailCut", e.target.value)}
+                                onBlur={() => onDraftFieldBlur(row.id, "tailCut")}
                               />
                               <input
                                 placeholder="放大比例"
                                 value={row.manualDraft?.zoomRatio || ""}
                                 onChange={(e) => onManualFieldChange(row.id, "zoomRatio", e.target.value)}
+                                onBlur={() => onDraftFieldBlur(row.id, "zoomRatio")}
                               />
                               <input
                                 placeholder="放大模式"
                                 value={row.manualDraft?.zoomMode || ""}
                                 onChange={(e) => onManualFieldChange(row.id, "zoomMode", e.target.value)}
+                                onBlur={() => onDraftFieldBlur(row.id, "zoomMode")}
                               />
                             </div>
                           </td>
@@ -625,26 +794,34 @@ function App() {
                       <>
                         <td>
                           <input
-                            value={fields?.headCut ?? ""}
+                            inputMode="decimal"
+                            value={draft.headCut}
                             onChange={(e) => onParsedFieldChange(row.id, "headCut", e.target.value)}
+                            onBlur={() => onDraftFieldBlur(row.id, "headCut")}
                           />
                         </td>
                         <td>
                           <input
-                            value={fields?.tailCut ?? ""}
+                            inputMode="decimal"
+                            value={draft.tailCut}
                             onChange={(e) => onParsedFieldChange(row.id, "tailCut", e.target.value)}
+                            onBlur={() => onDraftFieldBlur(row.id, "tailCut")}
                           />
                         </td>
                         <td>
                           <input
-                            value={fields?.zoomRatio ?? ""}
+                            inputMode="decimal"
+                            value={draft.zoomRatio}
                             onChange={(e) => onParsedFieldChange(row.id, "zoomRatio", e.target.value)}
+                            onBlur={() => onDraftFieldBlur(row.id, "zoomRatio")}
                           />
                         </td>
                         <td>
                           <input
-                            value={fields?.zoomMode ?? ""}
+                            inputMode="numeric"
+                            value={draft.zoomMode}
                             onChange={(e) => onParsedFieldChange(row.id, "zoomMode", e.target.value)}
+                            onBlur={() => onDraftFieldBlur(row.id, "zoomMode")}
                           />
                         </td>
                       </>
@@ -666,9 +843,19 @@ function App() {
                           </button>
                         )
                       ) : (
-                        <button type="button" onClick={() => onReveal(row.path)}>
-                          定位
-                        </button>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="row-save-btn"
+                            onClick={() => void onSaveRow(row.id)}
+                            disabled={!row.modified}
+                          >
+                            保存
+                          </button>
+                          <button type="button" onClick={() => onReveal(row.path)}>
+                            定位
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

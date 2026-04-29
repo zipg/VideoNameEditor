@@ -67,6 +67,17 @@ button:disabled {
   white-space: nowrap;
 }
 
+.row-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+
+.row-save-btn:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+}
+
 .batch-grid label {
   display: flex;
   flex-direction: column;

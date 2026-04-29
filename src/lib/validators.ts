@@ -32,7 +32,7 @@ export function validateBatchInput(
   if (headCut < 0 || tailCut < 0) return "cut_negative";
   if (!(zoomRatio > 0 && zoomRatio <= 2)) return "ratio_out_of_range";
   if (![1, 2, 3, 4].includes(zoomMode)) return "mode_out_of_range";
-  if (headCut + tailCut >= durationSec) return "cut_exceeds_duration";
+  if (durationSec > 0 && headCut + tailCut >= durationSec) return "cut_exceeds_duration";
 
   return null;
 }
