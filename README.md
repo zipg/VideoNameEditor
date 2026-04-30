@@ -1,3 +1,7 @@
+<img width="1100" height="680" alt="img_v3_02118_0b4a3c3d-77d8-4e11-88af-13fb5cddda1g" src="https://github.com/user-attachments/assets/9d8e7d96-9364-4623-8263-a228e31c2ac0" />
+<img width="1124" height="480" alt="img_v3_02117_3de0cd3e-2a33-4477-a798-25a2d1dc1f3g" src="https://github.com/user-attachments/assets/349fb6b4-ad84-45e9-8699-593a76a0b61e" />
+
+
 # 视频批处理工具
 
 面向 MP4 文件的桌面批处理工具，支持文件名参数批量修改和视频分辨率批量裁剪。
