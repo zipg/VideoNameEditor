@@ -213,7 +213,7 @@ fn process_one_resolution(
             "-c:v",
             "libx264",
             "-crf",
-            "18",
+            "23",
             "-preset",
             "medium",
             "-c:a",

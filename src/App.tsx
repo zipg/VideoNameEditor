@@ -968,6 +968,16 @@ function App() {
     setResolutionRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, selected: value } : row)));
   }
 
+  function resolutionInputFromRow(row: ResolutionRow): ResolutionProcessInput {
+    return {
+      id: row.id,
+      sourcePath: row.path,
+      targetWidth: row.targetWidth,
+      targetHeight: row.targetHeight,
+      overwriteSource: resolutionOutputMode === "overwrite",
+    };
+  }
+
   function onClearResolutionList() {
     if (isResolutionProcessing) {
       window.alert("正在处理视频，请等待完成后再清空列表。");
@@ -982,13 +992,7 @@ function App() {
   }
 
   async function onProcessResolutionBatch() {
-    const items: ResolutionProcessInput[] = selectedResolutionRows.map((row) => ({
-      id: row.id,
-      sourcePath: row.path,
-      targetWidth: row.targetWidth,
-      targetHeight: row.targetHeight,
-      overwriteSource: resolutionOutputMode === "overwrite",
-    }));
+    const items = selectedResolutionRows.map(resolutionInputFromRow);
 
     if (!items.length) {
       window.alert("没有需要处理的竖版非 9:16 视频。");
@@ -1017,6 +1021,11 @@ function App() {
           if (!matched) return row;
           return {
             ...row,
+            id: matched.success ? matched.outputPath || row.id : row.id,
+            path: matched.success ? matched.outputPath || row.path : row.path,
+            width: matched.success ? row.targetWidth : row.width,
+            height: matched.success ? row.targetHeight : row.height,
+            ratioStatus: matched.success ? "nineSixteen" : row.ratioStatus,
             processStatus: matched.success ? "success" : "failed",
             processError: matched.reason,
             progress: matched.success ? 100 : row.progress,
@@ -1029,6 +1038,49 @@ function App() {
     } catch (error) {
       appendError("调用 process_resolution_batch 失败", error);
       window.alert("批量处理失败，请查看下方错误信息。");
+    } finally {
+      setIsResolutionProcessing(false);
+    }
+  }
+
+  async function onProcessResolutionRow(row: ResolutionRow) {
+    if (row.ratioStatus !== "needsCrop" || isResolutionProcessing) return;
+
+    const items = [resolutionInputFromRow(row)];
+    setIsResolutionProcessing(true);
+    setResolutionRows((prev) =>
+      prev.map((item) =>
+        item.id === row.id ? { ...item, processStatus: "processing", processError: undefined, progress: 0 } : item,
+      ),
+    );
+
+    try {
+      const results = await invoke<ResolutionProcessResult[]>("process_resolution_batch", { items });
+      const matched = results[0];
+      setResolutionRows((prev) =>
+        prev.map((item) => {
+          if (item.id !== row.id) return item;
+          return {
+            ...item,
+            id: matched?.success ? matched.outputPath || item.id : item.id,
+            path: matched?.success ? matched.outputPath || item.path : item.path,
+            width: matched?.success ? item.targetWidth : item.width,
+            height: matched?.success ? item.targetHeight : item.height,
+            ratioStatus: matched?.success ? "nineSixteen" : item.ratioStatus,
+            processStatus: matched?.success ? "success" : "failed",
+            processError: matched?.reason,
+            progress: matched?.success ? 100 : item.progress,
+            selected: matched?.success ? false : item.selected,
+          };
+        }),
+      );
+
+      if (!matched?.success) {
+        window.alert(`裁剪失败：${matched?.reason || "未知错误"}`);
+      }
+    } catch (error) {
+      appendError("调用 process_resolution_batch 失败", error);
+      window.alert("单个视频裁剪失败，请查看下方错误信息。");
     } finally {
       setIsResolutionProcessing(false);
     }
@@ -1067,12 +1119,9 @@ function App() {
   }
 
   return (
-    <main className="page">
+    <main className={`page ${activePage === "filename" ? "filename-page" : "resolution-page"}`}>
       <header className="app-header">
-        <div>
-          <h1>视频批处理工具</h1>
-          <p>{activePage === "filename" ? "文件名参数批处理" : "视频分辨率批处理"}</p>
-        </div>
+        <h1>{activePage === "filename" ? "文件名参数批处理" : "视频分辨率批处理"}</h1>
         <div className="page-switch">
           <button
             type="button"
@@ -1354,7 +1403,7 @@ function App() {
         <>
           <section className="toolbar">
             <button type="button" onClick={onResolutionBatchEdit} disabled={!resolutionRows.length || isResolutionProcessing}>
-              批量修改
+              批量裁剪
             </button>
             <button type="button" onClick={onClearResolutionList} disabled={!resolutionRows.length || isResolutionProcessing}>
               清空列表
@@ -1426,7 +1475,7 @@ function App() {
                   <col style={{ width: "140px" }} />
                   <col style={{ width: "140px" }} />
                   <col style={{ width: "220px" }} />
-                  <col style={{ width: "96px" }} />
+                  <col style={{ width: "148px" }} />
                 </colgroup>
                 <thead>
                   <tr>
@@ -1475,9 +1524,18 @@ function App() {
                         </div>
                       </td>
                       <td>
-                        <button type="button" onClick={() => onReveal(row.path)}>
-                          定位
-                        </button>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            disabled={row.ratioStatus !== "needsCrop" || isResolutionProcessing}
+                            onClick={() => void onProcessResolutionRow(row)}
+                          >
+                            裁剪
+                          </button>
+                          <button type="button" onClick={() => onReveal(row.path)}>
+                            定位
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

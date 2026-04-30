@@ -25,6 +25,15 @@ body {
   flex-direction: column;
   gap: 16px;
   overflow: hidden;
+  transition: background 180ms ease;
+}
+
+.filename-page {
+  background: linear-gradient(135deg, #f3f4f6 0%, #eef2ff 100%);
+}
+
+.resolution-page {
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%);
 }
 
 .app-header {
@@ -37,12 +46,6 @@ body {
 .app-header h1 {
   margin: 0;
   font-size: 22px;
-}
-
-.app-header p {
-  margin: 4px 0 0;
-  color: #6b7280;
-  font-size: 13px;
 }
 
 .page-switch {
