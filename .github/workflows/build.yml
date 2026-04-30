@@ -12,6 +12,7 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-15-intel
@@ -45,7 +46,13 @@ jobs:
         run: npm run prepare:sidecars -- ${{ matrix.target }}
 
       - name: Build installers
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+            npm run tauri build -- --target ${{ matrix.target }} --bundles nsis
+          else
+            npm run tauri build -- --target ${{ matrix.target }} --bundles dmg
+          fi
 
       - name: Prepare macOS artifacts
         if: startsWith(matrix.target, 'aarch64-apple') || startsWith(matrix.target, 'x86_64-apple')

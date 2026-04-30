@@ -145,7 +145,7 @@ pub fn process_resolution_batch(
 
     for item in items {
         let result = process_one_resolution(&app, &item);
-        if result.success {
+        if result.success && item.open_output_folder {
             if let Some(output_dir) = &result.output_dir {
                 output_dirs.insert(output_dir.clone());
             }

@@ -101,6 +101,7 @@ export type ResolutionProcessInput = {
   targetWidth: number;
   targetHeight: number;
   overwriteSource: boolean;
+  openOutputFolder: boolean;
 };
 
 export type ResolutionProcessResult = {

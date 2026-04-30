@@ -82,6 +82,7 @@ pub struct ResolutionProcessInput {
     pub target_width: u32,
     pub target_height: u32,
     pub overwrite_source: bool,
+    pub open_output_folder: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

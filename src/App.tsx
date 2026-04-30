@@ -26,6 +26,8 @@ type DragDropPayload = {
 
 const ZOOM_MODE_TIP = "1.四面放大 2.上下放大 3.向下拉长 4.向上拉长";
 const PAGE_STORAGE_KEY = "video-batch-tool-active-page";
+const RESOLUTION_OUTPUT_MODE_STORAGE_KEY = "video-batch-tool-resolution-output-mode";
+const RESOLUTION_OPEN_FOLDER_STORAGE_KEY = "video-batch-tool-resolution-open-folder";
 
 function emptyManualDraft(): ManualDraft {
   return {
@@ -258,7 +260,14 @@ function App() {
   const [errorLog, setErrorLog] = useState<string[]>([]);
   const [resolutionRows, setResolutionRows] = useState<ResolutionRow[]>([]);
   const [showResolutionBatch, setShowResolutionBatch] = useState(false);
-  const [resolutionOutputMode, setResolutionOutputMode] = useState<"newFile" | "overwrite">("newFile");
+  const [resolutionOutputMode, setResolutionOutputMode] = useState<"newFile" | "overwrite">(() => {
+    const stored = window.localStorage.getItem(RESOLUTION_OUTPUT_MODE_STORAGE_KEY);
+    return stored === "overwrite" ? "overwrite" : "newFile";
+  });
+  const [openOutputFolder, setOpenOutputFolder] = useState(() => {
+    const stored = window.localStorage.getItem(RESOLUTION_OPEN_FOLDER_STORAGE_KEY);
+    return stored !== "false";
+  });
   const [isResolutionProcessing, setIsResolutionProcessing] = useState(false);
   const [overallResolutionProgress, setOverallResolutionProgress] = useState(0);
   const pendingFilesRef = useRef<string[] | null>(null);
@@ -280,6 +289,14 @@ function App() {
   useEffect(() => {
     resolutionProcessingRef.current = isResolutionProcessing;
   }, [isResolutionProcessing]);
+
+  useEffect(() => {
+    window.localStorage.setItem(RESOLUTION_OUTPUT_MODE_STORAGE_KEY, resolutionOutputMode);
+  }, [resolutionOutputMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(RESOLUTION_OPEN_FOLDER_STORAGE_KEY, String(openOutputFolder));
+  }, [openOutputFolder]);
 
   useEffect(() => {
     guardRef.current = appState.guard;
@@ -975,6 +992,7 @@ function App() {
       targetWidth: row.targetWidth,
       targetHeight: row.targetHeight,
       overwriteSource: resolutionOutputMode === "overwrite",
+      openOutputFolder,
     };
   }
 
@@ -1427,6 +1445,15 @@ function App() {
                 onChange={() => setResolutionOutputMode("overwrite")}
               />
               覆盖源文件
+            </label>
+            <label className="output-option">
+              <input
+                type="checkbox"
+                checked={openOutputFolder}
+                disabled={isResolutionProcessing}
+                onChange={(e) => setOpenOutputFolder(e.target.checked)}
+              />
+              完成后自动打开文件夹
             </label>
           </section>
 
