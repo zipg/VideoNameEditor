@@ -3,7 +3,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::models::{FileRowDto, RenameBatchSummary, RenameItemInput};
+use crate::models::{
+    FileRowDto, RenameBatchSummary, RenameItemInput, ResolutionInfoDto, ResolutionProcessInput,
+    ResolutionProcessResult,
+};
 use crate::parser::parse_filename;
 use crate::probe::probe_duration;
 
@@ -110,4 +113,17 @@ fn parse_one_file(path: String) -> FileRowDto {
 #[tauri::command]
 pub fn execute_batch_rename(items: Vec<RenameItemInput>) -> RenameBatchSummary {
     crate::rename::execute_rename_batch(items)
+}
+
+#[tauri::command]
+pub fn probe_resolution_files(paths: Vec<String>) -> Vec<ResolutionInfoDto> {
+    crate::resolution::probe_resolution_files(paths)
+}
+
+#[tauri::command]
+pub fn process_resolution_batch(
+    app: tauri::AppHandle,
+    items: Vec<ResolutionProcessInput>,
+) -> Vec<ResolutionProcessResult> {
+    crate::resolution::process_resolution_batch(app, items)
 }

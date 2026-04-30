@@ -4,6 +4,7 @@ pub mod models;
 pub mod parser;
 pub mod probe;
 pub mod rename;
+pub mod resolution;
 pub mod validator;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -13,7 +14,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::parse_files,
-            commands::execute_batch_rename
+            commands::execute_batch_rename,
+            commands::probe_resolution_files,
+            commands::process_resolution_batch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

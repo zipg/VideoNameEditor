@@ -9,6 +9,11 @@ import {
   ParseFileRowDto,
   RenameBatchSummary,
   RenameItemInput,
+  ResolutionInfoDto,
+  ResolutionProcessInput,
+  ResolutionProcessResult,
+  ResolutionProgressEvent,
+  ResolutionRow,
   RowFields,
 } from "./types";
 import { reducer, initialState } from "./state/reducer";
@@ -20,6 +25,7 @@ type DragDropPayload = {
 };
 
 const ZOOM_MODE_TIP = "1.四面放大 2.上下放大 3.向下拉长 4.向上拉长";
+const PAGE_STORAGE_KEY = "video-batch-tool-active-page";
 
 function emptyManualDraft(): ManualDraft {
   return {
@@ -42,6 +48,19 @@ function dtoToRow(dto: ParseFileRowDto): FileRow {
     manualOpen: false,
     modified: false,
   };
+}
+
+function dtoToResolutionRow(dto: ResolutionInfoDto): ResolutionRow {
+  return {
+    ...dto,
+    selected: dto.ratioStatus === "needsCrop",
+    progress: dto.processStatus === "skippedHorizontal" || dto.processStatus === "skippedAlready" ? 100 : 0,
+  };
+}
+
+function formatResolution(width: number, height: number): string {
+  if (!width || !height) return "-";
+  return `${width}*${height}`;
 }
 
 function fieldsFromDraft(draft: ManualDraft): RowFields {
@@ -226,6 +245,10 @@ function clampCutDraft(draft: ManualDraft, field: keyof ManualDraft, durationSec
 
 function App() {
   const [appState, dispatch] = useReducer(reducer, initialState);
+  const [activePage, setActivePage] = useState<"filename" | "resolution">(() => {
+    const stored = window.localStorage.getItem(PAGE_STORAGE_KEY);
+    return stored === "resolution" ? "resolution" : "filename";
+  });
   const [rows, setRows] = useState<FileRow[]>([]);
   const [showBatchEdit, setShowBatchEdit] = useState(false);
   const [batchForm, setBatchForm] = useState({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
@@ -233,14 +256,30 @@ function App() {
   const [showClearModal, setShowClearModal] = useState(false);
   const [showErrorPanel, setShowErrorPanel] = useState(false);
   const [errorLog, setErrorLog] = useState<string[]>([]);
+  const [resolutionRows, setResolutionRows] = useState<ResolutionRow[]>([]);
+  const [showResolutionBatch, setShowResolutionBatch] = useState(false);
+  const [resolutionOutputMode, setResolutionOutputMode] = useState<"newFile" | "overwrite">("newFile");
+  const [isResolutionProcessing, setIsResolutionProcessing] = useState(false);
+  const [overallResolutionProgress, setOverallResolutionProgress] = useState(0);
   const pendingFilesRef = useRef<string[] | null>(null);
   const pendingPickRef = useRef(false);
   const rowsRef = useRef<FileRow[]>([]);
+  const activePageRef = useRef(activePage);
+  const resolutionProcessingRef = useRef(isResolutionProcessing);
   const guardRef = useRef(appState.guard);
 
   useEffect(() => {
     rowsRef.current = rows;
   }, [rows]);
+
+  useEffect(() => {
+    activePageRef.current = activePage;
+    window.localStorage.setItem(PAGE_STORAGE_KEY, activePage);
+  }, [activePage]);
+
+  useEffect(() => {
+    resolutionProcessingRef.current = isResolutionProcessing;
+  }, [isResolutionProcessing]);
 
   useEffect(() => {
     guardRef.current = appState.guard;
@@ -249,6 +288,17 @@ function App() {
   const sortedRows = useMemo(
     () => [...rows].sort((a, b) => (a.parseStatus === b.parseStatus ? 0 : a.parseStatus === "failed" ? -1 : 1)),
     [rows],
+  );
+  const resolutionRowsSorted = useMemo(
+    () => [
+      ...resolutionRows.filter((row) => row.ratioStatus === "needsCrop"),
+      ...resolutionRows.filter((row) => row.ratioStatus !== "needsCrop"),
+    ],
+    [resolutionRows],
+  );
+  const selectedResolutionRows = useMemo(
+    () => resolutionRows.filter((row) => row.selected && row.ratioStatus === "needsCrop"),
+    [resolutionRows],
   );
 
   function appendError(title: string, error: unknown) {
@@ -309,6 +359,15 @@ function App() {
     await parseInputPaths(paths);
   }
 
+  async function routeInputPaths(paths: string[]) {
+    if (activePageRef.current === "resolution") {
+      await parseResolutionInputPaths(paths);
+      return;
+    }
+
+    await requestParseInputPaths(paths);
+  }
+
   async function parseInputPaths(paths: string[]) {
     const normalizedPaths = paths.map((p) => p.trim()).filter(Boolean);
     const mp4Paths = normalizedPaths.filter((p) => p.toLowerCase().endsWith(".mp4"));
@@ -330,6 +389,44 @@ function App() {
     }
   }
 
+  async function parseResolutionInputPaths(paths: string[]) {
+    if (resolutionProcessingRef.current) {
+      window.alert("正在处理视频，请等待完成后再导入新文件。");
+      return;
+    }
+
+    const normalizedPaths = paths.map((p) => p.trim()).filter(Boolean);
+    const mp4Paths = normalizedPaths.filter((p) => p.toLowerCase().endsWith(".mp4"));
+    setErrorLog([]);
+    setShowErrorPanel(false);
+
+    if (!mp4Paths.length) {
+      appendError("未找到可处理的 MP4 文件", "请确认选择或拖拽的是 .mp4 文件");
+      return;
+    }
+
+    try {
+      const result = await invoke<ResolutionInfoDto[]>("probe_resolution_files", { paths: mp4Paths });
+      const parsedRows = result.map(dtoToResolutionRow);
+      setResolutionRows(parsedRows);
+      setShowResolutionBatch(false);
+      setOverallResolutionProgress(0);
+      const failedRows = parsedRows.filter((row) => row.processStatus === "failed");
+      if (failedRows.length) {
+        setErrorLog(
+          failedRows.map(
+            (row) =>
+              `[${new Date().toLocaleString()}] 分辨率探测失败\n${row.fileName}\n原因：${row.processError || "未知错误"}`,
+          ),
+        );
+      }
+      window.alert(`分辨率读取完成：${parsedRows.length - failedRows.length} 个成功，${failedRows.length} 个失败`);
+    } catch (error) {
+      appendError("调用 probe_resolution_files 失败", error);
+      window.alert("分辨率读取失败，请查看下方错误信息。");
+    }
+  }
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
@@ -337,17 +434,47 @@ function App() {
       const droppedPaths = event.payload.paths || [];
       if (!droppedPaths.length) return;
 
-      if (hasUnfinishedChanges(rowsRef.current, guardRef.current)) {
+      if (activePageRef.current === "filename" && hasUnfinishedChanges(rowsRef.current, guardRef.current)) {
         pendingPickRef.current = false;
         pendingFilesRef.current = droppedPaths;
         setShowGuardModal(true);
         return;
       }
 
-      void parseInputPaths(droppedPaths);
+      void routeInputPaths(droppedPaths);
     }).then((handler) => {
       unlisten = handler;
     }).catch((error) => appendError("注册拖拽监听失败", error));
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isResolutionProcessing || !selectedResolutionRows.length) return;
+    const total = selectedResolutionRows.reduce((sum, row) => sum + row.progress, 0);
+    setOverallResolutionProgress(Math.round((total / selectedResolutionRows.length) * 10) / 10);
+  }, [isResolutionProcessing, selectedResolutionRows]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    listen<ResolutionProgressEvent>("resolution-progress", (event) => {
+      setResolutionRows((prev) =>
+        prev.map((row) =>
+          row.id === event.payload.id
+            ? {
+                ...row,
+                progress: event.payload.progress,
+                processStatus: event.payload.progress >= 100 ? "success" : "processing",
+              }
+            : row,
+        ),
+      );
+    }).then((handler) => {
+      unlisten = handler;
+    }).catch((error) => appendError("注册分辨率进度监听失败", error));
 
     return () => {
       unlisten?.();
@@ -363,7 +490,7 @@ function App() {
       if (!picked) return;
 
       const paths = Array.isArray(picked) ? picked : [picked];
-      await requestParseInputPaths(paths);
+      await routeInputPaths(paths);
     } catch (error) {
       appendError("打开文件选择器失败", error);
       window.alert("打开文件选择器失败，请查看下方错误信息。");
@@ -371,7 +498,7 @@ function App() {
   }
 
   async function onPickFiles() {
-    if (hasUnfinishedChanges()) {
+    if (activePage === "filename" && hasUnfinishedChanges()) {
       pendingFilesRef.current = null;
       pendingPickRef.current = true;
       setShowGuardModal(true);
@@ -404,7 +531,7 @@ function App() {
       return;
     }
 
-    await requestParseInputPaths(droppedPaths);
+    await routeInputPaths(droppedPaths);
   }
 
   function onClearList() {
@@ -827,6 +954,86 @@ function App() {
     }
   }
 
+  function onResolutionBatchEdit() {
+    setShowResolutionBatch((prev) => !prev);
+    setResolutionRows((prev) =>
+      prev.map((row) => ({
+        ...row,
+        selected: row.ratioStatus === "needsCrop",
+      })),
+    );
+  }
+
+  function onToggleResolutionSelect(rowId: string, value: boolean) {
+    setResolutionRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, selected: value } : row)));
+  }
+
+  function onClearResolutionList() {
+    if (isResolutionProcessing) {
+      window.alert("正在处理视频，请等待完成后再清空列表。");
+      return;
+    }
+
+    setResolutionRows([]);
+    setShowResolutionBatch(false);
+    setOverallResolutionProgress(0);
+    setErrorLog([]);
+    setShowErrorPanel(false);
+  }
+
+  async function onProcessResolutionBatch() {
+    const items: ResolutionProcessInput[] = selectedResolutionRows.map((row) => ({
+      id: row.id,
+      sourcePath: row.path,
+      targetWidth: row.targetWidth,
+      targetHeight: row.targetHeight,
+      overwriteSource: resolutionOutputMode === "overwrite",
+    }));
+
+    if (!items.length) {
+      window.alert("没有需要处理的竖版非 9:16 视频。");
+      return;
+    }
+
+    setIsResolutionProcessing(true);
+    setOverallResolutionProgress(0);
+    setResolutionRows((prev) =>
+      prev.map((row) =>
+        items.some((item) => item.id === row.id)
+          ? { ...row, processStatus: "processing", processError: undefined, progress: 0 }
+          : row,
+      ),
+    );
+
+    try {
+      const results = await invoke<ResolutionProcessResult[]>("process_resolution_batch", { items });
+      const successCount = results.filter((item) => item.success).length;
+      const failedCount = results.length - successCount;
+      const resultMap = new Map(results.map((item) => [item.id, item]));
+
+      setResolutionRows((prev) =>
+        prev.map((row) => {
+          const matched = resultMap.get(row.id);
+          if (!matched) return row;
+          return {
+            ...row,
+            processStatus: matched.success ? "success" : "failed",
+            processError: matched.reason,
+            progress: matched.success ? 100 : row.progress,
+            selected: matched.success ? false : row.selected,
+          };
+        }),
+      );
+      setOverallResolutionProgress(100);
+      window.alert(`处理完成：${successCount} 个成功，${failedCount} 个失败`);
+    } catch (error) {
+      appendError("调用 process_resolution_batch 失败", error);
+      window.alert("批量处理失败，请查看下方错误信息。");
+    } finally {
+      setIsResolutionProcessing(false);
+    }
+  }
+
   async function onReveal(path: string) {
     try {
       await revealItemInDir(path);
@@ -861,7 +1068,31 @@ function App() {
 
   return (
     <main className="page">
+      <header className="app-header">
+        <div>
+          <h1>视频批处理工具</h1>
+          <p>{activePage === "filename" ? "文件名参数批处理" : "视频分辨率批处理"}</p>
+        </div>
+        <div className="page-switch">
+          <button
+            type="button"
+            className={activePage === "filename" ? "active" : ""}
+            onClick={() => setActivePage("filename")}
+          >
+            文件名处理
+          </button>
+          <button
+            type="button"
+            className={activePage === "resolution" ? "active" : ""}
+            onClick={() => setActivePage("resolution")}
+          >
+            分辨率处理
+          </button>
+        </div>
+      </header>
 
+      {activePage === "filename" ? (
+        <>
       <section className="toolbar">
         <button type="button" onClick={onBatchEdit} disabled={!rows.length}>
           批量修改
@@ -1117,6 +1348,144 @@ function App() {
             </tbody>
           </table>
         </section>
+      )}
+        </>
+      ) : (
+        <>
+          <section className="toolbar">
+            <button type="button" onClick={onResolutionBatchEdit} disabled={!resolutionRows.length || isResolutionProcessing}>
+              批量修改
+            </button>
+            <button type="button" onClick={onClearResolutionList} disabled={!resolutionRows.length || isResolutionProcessing}>
+              清空列表
+            </button>
+            <label className="output-option">
+              <input
+                type="radio"
+                name="resolution-output-mode"
+                checked={resolutionOutputMode === "newFile"}
+                disabled={isResolutionProcessing}
+                onChange={() => setResolutionOutputMode("newFile")}
+              />
+              输出新文件
+            </label>
+            <label className="output-option">
+              <input
+                type="radio"
+                name="resolution-output-mode"
+                checked={resolutionOutputMode === "overwrite"}
+                disabled={isResolutionProcessing}
+                onChange={() => setResolutionOutputMode("overwrite")}
+              />
+              覆盖源文件
+            </label>
+          </section>
+
+          <section
+            className="dropzone"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={onDropFiles}
+            onClick={onPickFiles}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                void onPickFiles();
+              }
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            拖拽 MP4 文件到这里，或点击选择文件
+          </section>
+
+          {showResolutionBatch && (
+            <section className="resolution-batch-panel">
+              <button
+                type="button"
+                className="primary-action"
+                disabled={!selectedResolutionRows.length || isResolutionProcessing}
+                onClick={() => void onProcessResolutionBatch()}
+              >
+                一键全部9:16！
+              </button>
+              <div className="overall-progress">
+                <div className="progress-bar">
+                  <span style={{ width: `${overallResolutionProgress}%` }} />
+                </div>
+                <strong>{overallResolutionProgress.toFixed(1)}%</strong>
+              </div>
+            </section>
+          )}
+
+          {!!resolutionRows.length && (
+            <section className="table-wrap">
+              <table style={{ tableLayout: "fixed" }}>
+                <colgroup>
+                  {showResolutionBatch && <col style={{ width: "48px" }} />}
+                  <col style={{ width: "360px" }} />
+                  <col style={{ width: "140px" }} />
+                  <col style={{ width: "140px" }} />
+                  <col style={{ width: "220px" }} />
+                  <col style={{ width: "96px" }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    {showResolutionBatch && <th>选中</th>}
+                    <th>视频名</th>
+                    <th>当前分辨率</th>
+                    <th>处理后分辨率</th>
+                    <th>处理进度</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {resolutionRowsSorted.map((row) => (
+                    <tr key={row.id}>
+                      {showResolutionBatch && (
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={row.selected}
+                            disabled={row.ratioStatus !== "needsCrop" || isResolutionProcessing}
+                            onChange={(e) => onToggleResolutionSelect(row.id, e.target.checked)}
+                          />
+                        </td>
+                      )}
+                      <td>{row.fileName}</td>
+                      <td className={`resolution-status ${row.ratioStatus}`}>
+                        {formatResolution(row.width, row.height)}
+                      </td>
+                      <td>{row.ratioStatus === "needsCrop" ? formatResolution(row.targetWidth, row.targetHeight) : "/"}</td>
+                      <td>
+                        <div className="progress-cell">
+                          {row.processStatus === "skippedHorizontal" ? (
+                            <span className="muted">跳过：横版视频</span>
+                          ) : row.processStatus === "skippedAlready" ? (
+                            <span className="ok">已是 9:16</span>
+                          ) : row.processStatus === "failed" ? (
+                            <span className="err">{row.processError || "处理失败"}</span>
+                          ) : (
+                            <>
+                              <div className="progress-bar">
+                                <span style={{ width: `${row.progress}%` }} />
+                              </div>
+                              <span>{row.progress.toFixed(1)}%</span>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        <button type="button" onClick={() => onReveal(row.path)}>
+                          定位
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </>
       )}
 
       <section className={`error-panel ${showErrorPanel ? "expanded" : ""}`}>

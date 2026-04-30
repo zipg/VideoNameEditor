@@ -41,8 +41,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Prepare ffprobe sidecar
-        run: npm run prepare:ffprobe -- ${{ matrix.target }}
+      - name: Prepare ffmpeg and ffprobe sidecars
+        run: npm run prepare:sidecars -- ${{ matrix.target }}
 
       - name: Build installers
         run: npm run tauri build -- --target ${{ matrix.target }}

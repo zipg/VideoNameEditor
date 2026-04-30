@@ -56,3 +56,47 @@ pub struct RenameProgressEvent {
     pub total: usize,
     pub id: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolutionInfoDto {
+    pub id: String,
+    pub path: String,
+    pub file_name: String,
+    pub width: u32,
+    pub height: u32,
+    pub duration_sec: f64,
+    pub target_width: u32,
+    pub target_height: u32,
+    pub orientation: String,
+    pub ratio_status: String,
+    pub process_status: String,
+    pub process_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolutionProcessInput {
+    pub id: String,
+    pub source_path: String,
+    pub target_width: u32,
+    pub target_height: u32,
+    pub overwrite_source: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolutionProcessResult {
+    pub id: String,
+    pub success: bool,
+    pub output_path: Option<String>,
+    pub output_dir: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolutionProgressEvent {
+    pub id: String,
+    pub progress: f64,
+}

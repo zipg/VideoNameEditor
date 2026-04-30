@@ -1,6 +1,7 @@
 import { chmodSync, copyFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ffmpeg from "@ffmpeg-installer/ffmpeg";
 import ffprobe from "@ffprobe-installer/ffprobe";
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -10,14 +11,17 @@ if (!target) {
   throw new Error("Missing Tauri target triple. Pass it as the first argument.");
 }
 
-const outputName = target.endsWith("windows-msvc") ? `ffprobe-${target}.exe` : `ffprobe-${target}`;
-const outputPath = join(rootDir, "src-tauri", "binaries", outputName);
+prepareSidecar("ffprobe", ffprobe.path, target);
+prepareSidecar("ffmpeg", ffmpeg.path, target);
 
-mkdirSync(dirname(outputPath), { recursive: true });
-copyFileSync(ffprobe.path, outputPath);
-chmodSync(outputPath, 0o755);
-
-console.log(`Prepared ffprobe sidecar: ${outputPath}`);
+function prepareSidecar(name, sourcePath, targetTriple) {
+  const outputName = targetTriple.endsWith("windows-msvc") ? `${name}-${targetTriple}.exe` : `${name}-${targetTriple}`;
+  const outputPath = join(rootDir, "src-tauri", "binaries", outputName);
+  mkdirSync(dirname(outputPath), { recursive: true });
+  copyFileSync(sourcePath, outputPath);
+  chmodSync(outputPath, 0o755);
+  console.log(`Prepared ${name} sidecar: ${outputPath}`);
+}
 
 function targetFromHost() {
   if (process.platform === "darwin" && process.arch === "arm64") return "aarch64-apple-darwin";
