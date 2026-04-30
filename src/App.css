@@ -19,21 +19,55 @@ body {
 }
 
 .page {
+  position: relative;
+  isolation: isolate;
   padding: 20px;
   height: 100vh;
   display: flex;
   flex-direction: column;
   gap: 16px;
   overflow: hidden;
-  transition: background 180ms ease;
+  transition: background 260ms ease;
+}
+
+.page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  animation: page-bg-fade 320ms ease-out forwards;
+}
+
+.page > * {
+  position: relative;
+  z-index: 1;
 }
 
 .filename-page {
   background: linear-gradient(135deg, #f3f4f6 0%, #eef2ff 100%);
 }
 
+.filename-page::before {
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%);
+}
+
 .resolution-page {
   background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%);
+}
+
+.resolution-page::before {
+  background: linear-gradient(135deg, #f3f4f6 0%, #eef2ff 100%);
+}
+
+@keyframes page-bg-fade {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
 }
 
 .app-header {
