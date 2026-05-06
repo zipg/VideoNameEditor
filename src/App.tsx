@@ -32,6 +32,7 @@ const RESOLUTION_OPEN_FOLDER_STORAGE_KEY = "video-batch-tool-resolution-open-fol
 function emptyManualDraft(): ManualDraft {
   return {
     videoName: "",
+    categories: "",
     headCut: "",
     tailCut: "",
     zoomRatio: "",
@@ -40,7 +41,7 @@ function emptyManualDraft(): ManualDraft {
 }
 
 function buildFileStem(fileName: string): string {
-  return fileName.trim().replace(/\.mp4\s*$/i, "");
+  return fileName.trim().replace(/\.(mp4|mov)\s*$/i, "");
 }
 function dtoToRow(dto: ParseFileRowDto): FileRow {
   return {
@@ -69,6 +70,7 @@ function fieldsFromDraft(draft: ManualDraft): RowFields {
   const normalized = normalizeDraft(draft);
   return {
     videoName: normalized.videoName,
+    categories: normalized.categories.split("\n").map((s) => s.trim()).filter(Boolean),
     headCut: Number(normalized.headCut),
     tailCut: Number(normalized.tailCut),
     zoomRatio: Number(normalized.zoomRatio),
@@ -81,6 +83,7 @@ function draftFromRow(row: FileRow): ManualDraft {
   if (row.parsedFields) {
     return {
       videoName: row.parsedFields.videoName,
+      categories: row.parsedFields.categories.join("\n"),
       headCut: String(row.parsedFields.headCut),
       tailCut: String(row.parsedFields.tailCut),
       zoomRatio: String(row.parsedFields.zoomRatio),
@@ -96,6 +99,7 @@ function draftFromRow(row: FileRow): ManualDraft {
 function normalizeDraft(draft: ManualDraft): ManualDraft {
   return {
     videoName: draft.videoName,
+    categories: draft.categories,
     headCut: normalizeNumericField("headCut", draft.headCut),
     tailCut: normalizeNumericField("tailCut", draft.tailCut),
     zoomRatio: normalizeNumericField("zoomRatio", draft.zoomRatio),
@@ -104,6 +108,7 @@ function normalizeDraft(draft: ManualDraft): ManualDraft {
 }
 
 function normalizeNumericField(field: keyof ManualDraft, value: string): string {
+  if (field === "videoName" || field === "categories") return value;
   const trimmed = value.trim();
   const isIncompleteDecimal = trimmed === ".";
   if (field === "headCut" || field === "tailCut") return trimmed && !isIncompleteDecimal ? trimmed : "0";
@@ -112,7 +117,7 @@ function normalizeNumericField(field: keyof ManualDraft, value: string): string 
 }
 
 function canAcceptNumericInput(field: keyof ManualDraft, value: string): boolean {
-  if (field === "videoName") return true;
+  if (field === "videoName" || field === "categories") return true;
   if (field === "zoomMode") return value === "" || /^[1-4]$/.test(value);
   return value === "" || /^\d*(\.\d{0,2})?$/.test(value);
 }
@@ -186,8 +191,8 @@ function parseErrorToText(error?: string): string {
       return "视频名为空（video_name_invalid）";
     case "precision_out_of_range":
       return "头尾切除和比例最多保留两位小数（precision_out_of_range）";
-    case "not_mp4":
-      return "文件后缀不是 .mp4（not_mp4）";
+    case "not_mp4_or_mov":
+      return "文件后缀不是 .mp4 或 .mov（not_mp4_or_mov）";
     case "cut_negative":
       return "头部或尾部切除不能为负数（cut_negative）";
     default:
@@ -197,11 +202,17 @@ function parseErrorToText(error?: string): string {
 
 function buildTargetName(
   row: FileRow,
-  fields: Pick<RowFields, "headCut" | "tailCut" | "zoomRatio" | "zoomMode"> & Partial<Pick<RowFields, "videoName">>,
+  fields: Pick<RowFields, "headCut" | "tailCut" | "zoomRatio" | "zoomMode"> & Partial<Pick<RowFields, "videoName" | "categories">>,
 ): string {
   const stem = buildFileStem(row.fileName);
   const base = fields.videoName ?? (row.parseStatus === "success" && row.parsedFields ? row.parsedFields.videoName : stem);
-  return `${base}-${trimNum(fields.headCut)}-${trimNum(fields.tailCut)}-${trimNum(fields.zoomRatio)}-${fields.zoomMode}.mp4`;
+  const ext = /\.mov\s*$/i.test(row.fileName.trim()) ? ".mov" : ".mp4";
+  const categories = fields.categories ?? (row.parseStatus === "success" ? row.parsedFields?.categories : undefined);
+  const catStr = categories && categories.length > 0 ? categories.join("&") : "";
+  if (catStr) {
+    return `${base}-${catStr}-${trimNum(fields.headCut)}-${trimNum(fields.tailCut)}-${trimNum(fields.zoomRatio)}-${fields.zoomMode}${ext}`;
+  }
+  return `${base}-${trimNum(fields.headCut)}-${trimNum(fields.tailCut)}-${trimNum(fields.zoomRatio)}-${fields.zoomMode}${ext}`;
 }
 
 function buildTargetPath(sourcePath: string, targetFileName: string): string {
@@ -218,10 +229,11 @@ function rowBaseVideoName(row: FileRow): string {
 
 function renamedFields(
   row: FileRow,
-  fields: Pick<RowFields, "headCut" | "tailCut" | "zoomRatio" | "zoomMode"> & Partial<Pick<RowFields, "videoName">>,
+  fields: Pick<RowFields, "headCut" | "tailCut" | "zoomRatio" | "zoomMode"> & Partial<Pick<RowFields, "videoName" | "categories">>,
 ): RowFields {
   return {
     videoName: fields.videoName?.trim() || rowBaseVideoName(row),
+    categories: fields.categories ?? row.parsedFields?.categories ?? [],
     headCut: fields.headCut,
     tailCut: fields.tailCut,
     zoomRatio: fields.zoomRatio,
@@ -387,17 +399,17 @@ function App() {
 
   async function parseInputPaths(paths: string[]) {
     const normalizedPaths = paths.map((p) => p.trim()).filter(Boolean);
-    const mp4Paths = normalizedPaths.filter((p) => p.toLowerCase().endsWith(".mp4"));
+    const videoPaths = normalizedPaths.filter((p) => /\.(mp4|mov)$/i.test(p));
     setErrorLog([]);
     setShowErrorPanel(false);
 
-    if (!mp4Paths.length) {
-      appendError("未找到可解析的 MP4 文件", "请确认选择或拖拽的是 .mp4 文件");
+    if (!videoPaths.length) {
+      appendError("未找到可解析的视频文件", "请确认选择或拖拽的是 .mp4 或 .mov 文件");
       return;
     }
 
     try {
-      const result = await invoke<ParseFileRowDto[]>("parse_files", { paths: mp4Paths });
+      const result = await invoke<ParseFileRowDto[]>("parse_files", { paths: videoPaths });
       const parsedRows = result.map(dtoToRow);
       resetAfterParse(parsedRows);
     } catch (error) {
@@ -413,17 +425,17 @@ function App() {
     }
 
     const normalizedPaths = paths.map((p) => p.trim()).filter(Boolean);
-    const mp4Paths = normalizedPaths.filter((p) => p.toLowerCase().endsWith(".mp4"));
+    const videoPaths = normalizedPaths.filter((p) => /\.(mp4|mov)$/i.test(p));
     setErrorLog([]);
     setShowErrorPanel(false);
 
-    if (!mp4Paths.length) {
-      appendError("未找到可处理的 MP4 文件", "请确认选择或拖拽的是 .mp4 文件");
+    if (!videoPaths.length) {
+      appendError("未找到可处理的视频文件", "请确认选择或拖拽的是 .mp4 或 .mov 文件");
       return;
     }
 
     try {
-      const result = await invoke<ResolutionInfoDto[]>("probe_resolution_files", { paths: mp4Paths });
+      const result = await invoke<ResolutionInfoDto[]>("probe_resolution_files", { paths: videoPaths });
       const parsedRows = result.map(dtoToResolutionRow);
       setResolutionRows(parsedRows);
       setShowResolutionBatch(false);
@@ -502,7 +514,7 @@ function App() {
     try {
       const picked = await open({
         multiple: true,
-        filters: [{ name: "MP4", extensions: ["mp4"] }],
+        filters: [{ name: "视频文件", extensions: ["mp4", "mov"] }],
       });
       if (!picked) return;
 
@@ -631,6 +643,21 @@ function App() {
         return {
           ...row,
           manualDraft: { ...(row.manualDraft || emptyManualDraft()), videoName: value },
+          modified: true,
+        };
+      }),
+    );
+    dispatch({ type: "MARK_DIRTY", value: true });
+  }
+
+  function onCategoriesChange(rowId: string, value: string) {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId) return row;
+        const draft = draftFromRow(row);
+        return {
+          ...row,
+          manualDraft: { ...draft, categories: value },
           modified: true,
         };
       }),
@@ -1183,7 +1210,7 @@ function App() {
         role="button"
         tabIndex={0}
       >
-        拖拽 MP4 文件到这里，或点击选择文件
+        拖拽 MP4/MOV 文件到这里，或点击选择文件
       </section>
 
 
@@ -1192,18 +1219,20 @@ function App() {
           <table style={{ tableLayout: "fixed" }}>
             <colgroup>
               {showBatchEdit && <col style={{ width: "48px" }} />}
-              <col style={{ width: "320px" }} />
-              <col style={{ width: "96px" }} />
-              <col style={{ width: "96px" }} />
-              <col style={{ width: "96px" }} />
-              <col style={{ width: "96px" }} />
-              <col style={{ width: "96px" }} />
+              <col style={{ width: "280px" }} />
+              <col style={{ width: "140px" }} />
+              <col style={{ width: "88px" }} />
+              <col style={{ width: "88px" }} />
+              <col style={{ width: "88px" }} />
+              <col style={{ width: "88px" }} />
+              <col style={{ width: "88px" }} />
               <col style={{ width: "112px" }} />
             </colgroup>
             <thead>
               <tr>
                 {showBatchEdit && <th>选中</th>}
                 <th>视频名</th>
+                <th>分类</th>
                 <th>头部切除</th>
                 <th>尾部切除</th>
                 <th>放大比例</th>
@@ -1220,6 +1249,9 @@ function App() {
                   </td>
                   <td>
                     <input value="保持原名称" disabled className="video-name-input batch-video-name-input" />
+                  </td>
+                  <td>
+                    <input value="保持不变" disabled />
                   </td>
                   <td>
                     <input
@@ -1290,6 +1322,15 @@ function App() {
                             : row.manualDraft?.videoName || buildFileStem(row.fileName)
                         }
                         onChange={(e) => onVideoNameChange(row.id, e.target.value)}
+                      />
+                    </td>
+                    <td>
+                      <textarea
+                        className="categories-input"
+                        value={draft.categories}
+                        onChange={(e) => onCategoriesChange(row.id, e.target.value)}
+                        rows={Math.max(1, (draft.categories.match(/\n/g) || []).length + 1)}
+                        placeholder="分类1&#10;分类2"
                       />
                     </td>
                     {row.parseStatus === "failed" ? (
@@ -1471,7 +1512,7 @@ function App() {
             role="button"
             tabIndex={0}
           >
-            拖拽 MP4 文件到这里，或点击选择文件
+            拖拽 MP4/MOV 文件到这里，或点击选择文件
           </section>
 
           {showResolutionBatch && (

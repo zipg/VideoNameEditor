@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct ParsedFields {
     pub video_name: String,
+    pub categories: Vec<String>,
     pub head_cut: f64,
     pub tail_cut: f64,
     pub zoom_ratio: f64,

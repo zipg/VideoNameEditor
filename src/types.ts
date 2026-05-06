@@ -3,6 +3,7 @@ export type RenameResult = "pending" | "success" | "failed";
 
 export type RowFields = {
   videoName: string;
+  categories: string[];
   headCut: number;
   tailCut: number;
   zoomRatio: number;
@@ -11,6 +12,7 @@ export type RowFields = {
 
 export type ManualDraft = {
   videoName: string;
+  categories: string;
   headCut: string;
   tailCut: string;
   zoomRatio: string;

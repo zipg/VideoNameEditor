@@ -8,15 +8,37 @@ fn has_max_two_decimals(raw: &str) -> bool {
 }
 
 pub fn parse_filename(file_name: &str, duration_sec: f64) -> Result<ParsedFields, String> {
-    let base = file_name.strip_suffix(".mp4").ok_or("not_mp4")?;
+    let base = file_name
+        .strip_suffix(".mp4")
+        .or_else(|| file_name.strip_suffix(".mov"))
+        .ok_or("not_mp4_or_mov")?;
     let parts: Vec<&str> = base.split('-').collect();
     if parts.len() < 5 {
         return Err("segment_count_invalid".into());
     }
 
-    let head_raw = parts[parts.len() - 4].trim();
-    let tail_raw = parts[parts.len() - 3].trim();
-    let ratio_raw = parts[parts.len() - 2].trim();
+    let has_categories = parts.len() >= 6;
+
+    let categories_raw = if has_categories {
+        parts[parts.len() - 5].trim()
+    } else {
+        ""
+    };
+    let head_raw = if has_categories {
+        parts[parts.len() - 4].trim()
+    } else {
+        parts[parts.len() - 4].trim()
+    };
+    let tail_raw = if has_categories {
+        parts[parts.len() - 3].trim()
+    } else {
+        parts[parts.len() - 3].trim()
+    };
+    let ratio_raw = if has_categories {
+        parts[parts.len() - 2].trim()
+    } else {
+        parts[parts.len() - 2].trim()
+    };
     let mode_raw = parts[parts.len() - 1].trim();
 
     if !has_max_two_decimals(head_raw)
@@ -31,7 +53,15 @@ pub fn parse_filename(file_name: &str, duration_sec: f64) -> Result<ParsedFields
     let tail = tail_raw.parse::<f64>().map_err(|_| "tail_invalid")?;
     let head = head_raw.parse::<f64>().map_err(|_| "head_invalid")?;
 
-    let video_name = parts[..parts.len() - 4].join("-");
+    // If new format (with categories): name segment count = parts - 5
+    // If old format (no categories): name segment count = parts - 4
+    let name_part_count = if has_categories {
+        parts.len() - 5
+    } else {
+        parts.len() - 4
+    };
+    let video_name = parts[..name_part_count].join("-");
+
     if video_name.trim().is_empty() {
         return Err("video_name_invalid".into());
     }
@@ -40,6 +70,16 @@ pub fn parse_filename(file_name: &str, duration_sec: f64) -> Result<ParsedFields
     if video_name.contains('-') {
         warnings.push("name_contains_hyphen".to_string());
     }
+
+    let categories: Vec<String> = if has_categories && !categories_raw.is_empty() {
+        categories_raw
+            .split('&')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        vec![]
+    };
 
     if !(1..=4).contains(&mode) {
         return Err("mode_out_of_range".into());
@@ -56,6 +96,7 @@ pub fn parse_filename(file_name: &str, duration_sec: f64) -> Result<ParsedFields
 
     Ok(ParsedFields {
         video_name,
+        categories,
         head_cut: head,
         tail_cut: tail,
         zoom_ratio: ratio,

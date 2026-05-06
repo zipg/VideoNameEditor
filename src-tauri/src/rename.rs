@@ -19,26 +19,57 @@ fn trim_num(value: f64) -> String {
     }
 }
 
+fn file_stem(name: &str) -> &str {
+    name.strip_suffix(".mp4")
+        .or_else(|| name.strip_suffix(".mov"))
+        .unwrap_or(name)
+}
+
+fn file_ext(name: &str) -> &str {
+    if name.ends_with(".mov") { ".mov" } else { ".mp4" }
+}
+
 pub fn build_target_name(
     original_file_name: &str,
     video_name: &str,
+    categories: &[String],
     head: f64,
     tail: f64,
     ratio: f64,
     mode: u8,
     parsed_success: bool,
 ) -> String {
-    let stem = original_file_name.trim_end_matches(".mp4");
+    let stem = file_stem(original_file_name);
+    let ext = file_ext(original_file_name);
     let base = if parsed_success { video_name } else { stem };
+    let cat_str = if categories.is_empty() {
+        String::new()
+    } else {
+        categories.join("&")
+    };
 
-    format!(
-        "{}-{}-{}-{}-{}.mp4",
-        base,
-        trim_num(head),
-        trim_num(tail),
-        trim_num(ratio),
-        mode
-    )
+    if cat_str.is_empty() {
+        format!(
+            "{}-{}-{}-{}-{}{}",
+            base,
+            trim_num(head),
+            trim_num(tail),
+            trim_num(ratio),
+            mode,
+            ext
+        )
+    } else {
+        format!(
+            "{}-{}-{}-{}-{}-{}{}",
+            base,
+            cat_str,
+            trim_num(head),
+            trim_num(tail),
+            trim_num(ratio),
+            mode,
+            ext
+        )
+    }
 }
 
 pub fn execute_rename_batch(items: Vec<RenameItemInput>) -> RenameBatchSummary {
