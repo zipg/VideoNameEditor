@@ -265,7 +265,7 @@ function App() {
   });
   const [rows, setRows] = useState<FileRow[]>([]);
   const [showBatchEdit, setShowBatchEdit] = useState(false);
-  const [batchForm, setBatchForm] = useState({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
+  const [batchForm, setBatchForm] = useState<Pick<ManualDraft, "headCut" | "tailCut" | "zoomRatio" | "zoomMode">>({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
   const [showGuardModal, setShowGuardModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [showErrorPanel, setShowErrorPanel] = useState(false);
@@ -880,7 +880,7 @@ function App() {
       .sort((a, b) => a - b)[0] ?? 0;
 
     setBatchForm((prev) => {
-      const normalized = clampCutDraft({ videoName: "", ...prev }, field, shortestDuration);
+      const normalized = clampCutDraft({ videoName: "", categories: "", ...prev }, field, shortestDuration);
       return {
         headCut: normalized.headCut,
         tailCut: normalized.tailCut,
@@ -895,7 +895,7 @@ function App() {
 
     const selectedRows = rows.filter((row) => row.selected);
     if (!selectedRows.length) return;
-    const normalizedBatchForm = normalizeDraft({ videoName: "", ...batchForm });
+    const normalizedBatchForm = normalizeDraft({ videoName: "", categories: "", ...batchForm });
 
     for (const row of selectedRows) {
       const error = validateBatchInput(
