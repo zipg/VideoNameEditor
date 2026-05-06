@@ -54,18 +54,54 @@ function dtoToRow(dto: ParseFileRowDto): FileRow {
   };
 }
 
+export function parseMediaFileName(fileName: string): Pick<MediaRow, "fileName" | "baseName" | "extension" | "categories"> {
+  const dotIndex = fileName.lastIndexOf(".");
+  const hasExtension = dotIndex > 0;
+  const extension = hasExtension ? fileName.slice(dotIndex) : "";
+  const stem = hasExtension ? fileName.slice(0, dotIndex) : fileName;
+  const dashIndex = stem.lastIndexOf("-");
+
+  if (dashIndex <= 0) {
+    return {
+      fileName,
+      baseName: stem,
+      extension,
+      categories: "",
+    };
+  }
+
+  const rawCategories = stem.slice(dashIndex + 1).trim();
+  const parsedCategories = rawCategories
+    .split("&")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  if (!parsedCategories) {
+    return {
+      fileName,
+      baseName: stem,
+      extension,
+      categories: "",
+    };
+  }
+
+  return {
+    fileName,
+    baseName: stem.slice(0, dashIndex),
+    extension,
+    categories: parsedCategories,
+  };
+}
+
 function emptyMediaRow(path: string): MediaRow {
   const separator = path.includes("\\") ? "\\" : "/";
   const fileName = path.slice(path.lastIndexOf(separator) + 1);
-  const dotIndex = fileName.lastIndexOf(".");
-  const hasExtension = dotIndex > 0;
+  const parsed = parseMediaFileName(fileName);
   return {
     id: path,
     path,
-    fileName,
-    baseName: hasExtension ? fileName.slice(0, dotIndex) : fileName,
-    extension: hasExtension ? fileName.slice(dotIndex) : "",
-    categories: "",
+    ...parsed,
     selected: true,
     renameResult: "pending",
     modified: false,
