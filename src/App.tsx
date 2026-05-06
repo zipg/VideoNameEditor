@@ -265,7 +265,13 @@ function App() {
   });
   const [rows, setRows] = useState<FileRow[]>([]);
   const [showBatchEdit, setShowBatchEdit] = useState(false);
-  const [batchForm, setBatchForm] = useState<Pick<ManualDraft, "headCut" | "tailCut" | "zoomRatio" | "zoomMode">>({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
+  const [batchForm, setBatchForm] = useState<Pick<ManualDraft, "headCut" | "tailCut" | "zoomRatio" | "zoomMode" | "categories">>({
+    headCut: "",
+    tailCut: "",
+    zoomRatio: "",
+    zoomMode: "",
+    categories: "",
+  });
   const [showGuardModal, setShowGuardModal] = useState(false);
   const [showClearModal, setShowClearModal] = useState(false);
   const [showErrorPanel, setShowErrorPanel] = useState(false);
@@ -364,7 +370,7 @@ function App() {
 
     dispatch({ type: "MARK_DIRTY", value: false });
     setShowBatchEdit(false);
-    setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
+    setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "", categories: "" });
   }
 
 
@@ -573,7 +579,7 @@ function App() {
     pendingPickRef.current = false;
     setRows([]);
     setShowBatchEdit(false);
-    setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "" });
+    setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "", categories: "" });
     setErrorLog([]);
     setShowErrorPanel(false);
     dispatch({ type: "MARK_DIRTY", value: false });
@@ -650,14 +656,19 @@ function App() {
     dispatch({ type: "MARK_DIRTY", value: true });
   }
 
+  function normalizeCategoriesInput(value: string): string {
+    return value.replace(/&/g, "\n");
+  }
+
   function onCategoriesChange(rowId: string, value: string) {
+    const normalizedValue = normalizeCategoriesInput(value);
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== rowId) return row;
         const draft = draftFromRow(row);
         return {
           ...row,
-          manualDraft: { ...draft, categories: value },
+          manualDraft: { ...draft, categories: normalizedValue },
           modified: true,
         };
       }),
@@ -872,6 +883,14 @@ function App() {
     dispatch({ type: "MARK_DIRTY", value: true });
   }
 
+  function onBatchCategoriesChange(value: string) {
+    setBatchForm((prev) => ({
+      ...prev,
+      categories: normalizeCategoriesInput(value),
+    }));
+    dispatch({ type: "MARK_DIRTY", value: true });
+  }
+
   function onBatchFieldBlur(field: "headCut" | "tailCut" | "zoomRatio" | "zoomMode") {
     const selectedRows = rows.filter((row) => row.selected);
     const shortestDuration = selectedRows
@@ -880,12 +899,13 @@ function App() {
       .sort((a, b) => a - b)[0] ?? 0;
 
     setBatchForm((prev) => {
-      const normalized = clampCutDraft({ videoName: "", categories: "", ...prev }, field, shortestDuration);
+      const normalized = clampCutDraft({ videoName: "", ...prev }, field, shortestDuration);
       return {
         headCut: normalized.headCut,
         tailCut: normalized.tailCut,
         zoomRatio: normalized.zoomRatio,
         zoomMode: normalized.zoomMode,
+        categories: prev.categories,
       };
     });
   }
@@ -895,7 +915,10 @@ function App() {
 
     const selectedRows = rows.filter((row) => row.selected);
     if (!selectedRows.length) return;
-    const normalizedBatchForm = normalizeDraft({ videoName: "", categories: "", ...batchForm });
+    const normalizedBatchForm = normalizeDraft({ videoName: "", ...batchForm });
+    const batchCategories = normalizedBatchForm.categories.trim()
+      ? normalizedBatchForm.categories.split("\n").map((value) => value.trim()).filter(Boolean)
+      : undefined;
 
     for (const row of selectedRows) {
       const error = validateBatchInput(
@@ -916,6 +939,7 @@ function App() {
       tailCut: normalizedBatchForm.tailCut,
       zoomRatio: normalizedBatchForm.zoomRatio,
       zoomMode: normalizedBatchForm.zoomMode,
+      categories: normalizedBatchForm.categories,
     });
 
     const fields = {
@@ -923,6 +947,7 @@ function App() {
       tailCut: Number(normalizedBatchForm.tailCut),
       zoomRatio: Number(normalizedBatchForm.zoomRatio),
       zoomMode: Number(normalizedBatchForm.zoomMode) as 1 | 2 | 3 | 4,
+      categories: batchCategories,
     };
 
     const renameItems: RenameItemInput[] = [];
@@ -1219,8 +1244,8 @@ function App() {
           <table style={{ tableLayout: "fixed" }}>
             <colgroup>
               {showBatchEdit && <col style={{ width: "48px" }} />}
-              <col style={{ width: "280px" }} />
-              <col style={{ width: "140px" }} />
+              <col style={{ width: "240px" }} />
+              <col style={{ width: "220px" }} />
               <col style={{ width: "88px" }} />
               <col style={{ width: "88px" }} />
               <col style={{ width: "88px" }} />
@@ -1251,7 +1276,13 @@ function App() {
                     <input value="保持原名称" disabled className="video-name-input batch-video-name-input" />
                   </td>
                   <td>
-                    <input value="保持不变" disabled />
+                    <textarea
+                      className="categories-input"
+                      value={batchForm.categories}
+                      onChange={(e) => onBatchCategoriesChange(e.target.value)}
+                      rows={2}
+                      placeholder={"留空保持不变\n分类1\n分类2"}
+                    />
                   </td>
                   <td>
                     <input
@@ -1329,7 +1360,7 @@ function App() {
                         className="categories-input"
                         value={draft.categories}
                         onChange={(e) => onCategoriesChange(row.id, e.target.value)}
-                        rows={Math.max(1, (draft.categories.match(/\n/g) || []).length + 1)}
+                        rows={2}
                         placeholder="分类1&#10;分类2"
                       />
                     </td>

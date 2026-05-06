@@ -270,9 +270,17 @@ input {
   overflow-y: auto;
 }
 
-.table-wrap input:not([type="checkbox"]) {
+.table-wrap input:not([type="checkbox"]),
+.table-wrap textarea {
   width: 100%;
   min-width: 0;
+  box-sizing: border-box;
+}
+
+.categories-input {
+  resize: none;
+  min-height: 56px;
+  line-height: 1.4;
 }
 
 .table-wrap td {

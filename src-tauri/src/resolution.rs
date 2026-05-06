@@ -201,6 +201,12 @@ fn process_one_resolution(
         "crop={}:{}:(in_w-{})/2:(in_h-{})/2",
         item.target_width, item.target_height, item.target_width, item.target_height
     );
+    let is_mov = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("mov"))
+        .unwrap_or(false);
+    let crf = if is_mov { "28" } else { "23" };
 
     let mut command = build_ffmpeg_command(&ffmpeg);
     command
@@ -213,7 +219,7 @@ fn process_one_resolution(
             "-c:v",
             "libx264",
             "-crf",
-            "23",
+            crf,
             "-preset",
             "medium",
             "-c:a",
