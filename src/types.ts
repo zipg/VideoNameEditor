@@ -38,6 +38,19 @@ export type FileRow = {
   modified?: boolean;
 };
 
+export type MediaRow = {
+  id: string;
+  path: string;
+  fileName: string;
+  baseName: string;
+  extension: string;
+  categories: string;
+  selected: boolean;
+  renameResult: RenameResult;
+  renameError?: string;
+  modified?: boolean;
+};
+
 export type ParseFileRowDto = {
   id: string;
   path: string;

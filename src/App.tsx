@@ -6,6 +6,7 @@ import { listen, TauriEvent } from "@tauri-apps/api/event";
 import {
   FileRow,
   ManualDraft,
+  MediaRow,
   ParseFileRowDto,
   RenameBatchSummary,
   RenameItemInput,
@@ -51,6 +52,41 @@ function dtoToRow(dto: ParseFileRowDto): FileRow {
     manualOpen: false,
     modified: false,
   };
+}
+
+function emptyMediaRow(path: string): MediaRow {
+  const separator = path.includes("\\") ? "\\" : "/";
+  const fileName = path.slice(path.lastIndexOf(separator) + 1);
+  const dotIndex = fileName.lastIndexOf(".");
+  const hasExtension = dotIndex > 0;
+  return {
+    id: path,
+    path,
+    fileName,
+    baseName: hasExtension ? fileName.slice(0, dotIndex) : fileName,
+    extension: hasExtension ? fileName.slice(dotIndex) : "",
+    categories: "",
+    selected: true,
+    renameResult: "pending",
+    modified: false,
+  };
+}
+
+function normalizeCategoriesInput(value: string): string {
+  return value.replace(/&/g, "\n");
+}
+
+function mediaCategoriesList(categories: string): string[] {
+  return normalizeCategoriesInput(categories)
+    .split("\n")
+    .map((value: string) => value.trim())
+    .filter(Boolean);
+}
+
+function buildMediaTargetName(row: MediaRow, categories?: string): string {
+  const categoryList = categories === undefined ? mediaCategoriesList(row.categories) : mediaCategoriesList(categories);
+  if (!categoryList.length) return `${row.baseName}${row.extension}`;
+  return `${row.baseName}-${categoryList.join("&")}${row.extension}`;
 }
 
 function dtoToResolutionRow(dto: ResolutionInfoDto): ResolutionRow {
@@ -259,9 +295,9 @@ function clampCutDraft(draft: ManualDraft, field: keyof ManualDraft, durationSec
 
 function App() {
   const [appState, dispatch] = useReducer(reducer, initialState);
-  const [activePage, setActivePage] = useState<"filename" | "resolution">(() => {
+  const [activePage, setActivePage] = useState<"filename" | "resolution" | "media">(() => {
     const stored = window.localStorage.getItem(PAGE_STORAGE_KEY);
-    return stored === "resolution" ? "resolution" : "filename";
+    return stored === "resolution" || stored === "media" ? stored : "filename";
   });
   const [rows, setRows] = useState<FileRow[]>([]);
   const [showBatchEdit, setShowBatchEdit] = useState(false);
@@ -278,6 +314,9 @@ function App() {
   const [errorLog, setErrorLog] = useState<string[]>([]);
   const [resolutionRows, setResolutionRows] = useState<ResolutionRow[]>([]);
   const [showResolutionBatch, setShowResolutionBatch] = useState(false);
+  const [mediaRows, setMediaRows] = useState<MediaRow[]>([]);
+  const [showMediaBatchEdit, setShowMediaBatchEdit] = useState(false);
+  const [mediaBatchCategories, setMediaBatchCategories] = useState("");
   const [resolutionOutputMode, setResolutionOutputMode] = useState<"newFile" | "overwrite">(() => {
     const stored = window.localStorage.getItem(RESOLUTION_OUTPUT_MODE_STORAGE_KEY);
     return stored === "overwrite" ? "overwrite" : "newFile";
@@ -291,6 +330,7 @@ function App() {
   const pendingFilesRef = useRef<string[] | null>(null);
   const pendingPickRef = useRef(false);
   const rowsRef = useRef<FileRow[]>([]);
+  const mediaRowsRef = useRef<MediaRow[]>([]);
   const activePageRef = useRef(activePage);
   const resolutionProcessingRef = useRef(isResolutionProcessing);
   const guardRef = useRef(appState.guard);
@@ -298,6 +338,10 @@ function App() {
   useEffect(() => {
     rowsRef.current = rows;
   }, [rows]);
+
+  useEffect(() => {
+    mediaRowsRef.current = mediaRows;
+  }, [mediaRows]);
 
   useEffect(() => {
     activePageRef.current = activePage;
@@ -335,7 +379,6 @@ function App() {
     () => resolutionRows.filter((row) => row.selected && row.ratioStatus === "needsCrop"),
     [resolutionRows],
   );
-
   function appendError(title: string, error: unknown) {
     const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error);
     setErrorLog((prev) => [
@@ -373,8 +416,25 @@ function App() {
     setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "", categories: "" });
   }
 
+  function resetMediaRows(parsedRows: MediaRow[]) {
+    setMediaRows(parsedRows);
+    setShowMediaBatchEdit(false);
+    setMediaBatchCategories("");
+    setErrorLog([]);
+    setShowErrorPanel(false);
+    dispatch({ type: "MARK_DIRTY", value: false });
+  }
 
   function hasUnfinishedChanges(currentRows = rows, guard = appState.guard) {
+    return (
+      guard.hasUnsavedChanges ||
+      guard.isRenaming ||
+      guard.hasPartialFailure ||
+      currentRows.some((row) => row.modified)
+    );
+  }
+
+  function hasUnfinishedMediaChanges(currentRows = mediaRows, guard = appState.guard) {
     return (
       guard.hasUnsavedChanges ||
       guard.isRenaming ||
@@ -394,9 +454,25 @@ function App() {
     await parseInputPaths(paths);
   }
 
+  async function requestMediaInputPaths(paths: string[]) {
+    if (hasUnfinishedMediaChanges()) {
+      pendingPickRef.current = false;
+      pendingFilesRef.current = paths;
+      setShowGuardModal(true);
+      return;
+    }
+
+    await parseMediaInputPaths(paths);
+  }
+
   async function routeInputPaths(paths: string[]) {
     if (activePageRef.current === "resolution") {
       await parseResolutionInputPaths(paths);
+      return;
+    }
+
+    if (activePageRef.current === "media") {
+      await requestMediaInputPaths(paths);
       return;
     }
 
@@ -422,6 +498,20 @@ function App() {
       appendError("调用 parse_files 失败", error);
       window.alert("解析失败，请查看下方错误信息。\n如果是拖拽导入，建议优先使用“批量解析”按钮。");
     }
+  }
+
+  async function parseMediaInputPaths(paths: string[]) {
+    const normalizedPaths = paths.map((p) => p.trim()).filter(Boolean);
+    const mediaPaths = normalizedPaths.filter((p) => /\.(png|jpg|jpeg|mp3|wav)$/i.test(p));
+    setErrorLog([]);
+    setShowErrorPanel(false);
+
+    if (!mediaPaths.length) {
+      appendError("未找到可处理的图片/音乐文件", "请确认选择或拖拽的是 .png / .jpg / .jpeg / .mp3 / .wav 文件");
+      return;
+    }
+
+    resetMediaRows(mediaPaths.map(emptyMediaRow));
   }
 
   async function parseResolutionInputPaths(paths: string[]) {
@@ -462,6 +552,201 @@ function App() {
     }
   }
 
+  function onMediaCategoriesChange(rowId: string, value: string) {
+    const normalizedValue = normalizeCategoriesInput(value);
+    setMediaRows((prev) =>
+      prev.map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              categories: normalizedValue,
+              modified: true,
+            }
+          : row,
+      ),
+    );
+    dispatch({ type: "MARK_DIRTY", value: true });
+  }
+
+  function onMediaBatchEdit() {
+    setShowMediaBatchEdit((prev) => !prev);
+    setMediaRows((prev) => prev.map((row) => ({ ...row, selected: true })));
+  }
+
+  function onToggleMediaSelect(rowId: string, value: boolean) {
+    setMediaRows((prev) => prev.map((row) => (row.id === rowId ? { ...row, selected: value } : row)));
+  }
+
+  function onMediaBatchCategoriesChange(value: string) {
+    setMediaBatchCategories(normalizeCategoriesInput(value));
+    dispatch({ type: "MARK_DIRTY", value: true });
+  }
+
+  async function onSaveMediaRow(rowId: string) {
+    const row = mediaRows.find((item) => item.id === rowId);
+    if (!row) return;
+
+    const normalizedCategories = normalizeCategoriesInput(row.categories);
+    const targetFileName = buildMediaTargetName(row, normalizedCategories);
+
+    if (targetFileName === row.fileName) {
+      setMediaRows((prev) =>
+        prev.map((item) =>
+          item.id === rowId
+            ? {
+                ...item,
+                categories: normalizedCategories,
+                modified: false,
+              }
+            : item,
+        ),
+      );
+      if (!mediaRows.some((item) => item.id !== rowId && item.modified)) {
+        dispatch({ type: "MARK_DIRTY", value: false });
+      }
+      return;
+    }
+
+    dispatch({ type: "RENAME_STARTED" });
+
+    try {
+      const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
+        items: [{ id: row.id, sourcePath: row.path, targetFileName }],
+      });
+      const itemResult = result.results[0];
+      dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
+
+      setMediaRows((prev) =>
+        prev.map((item) => {
+          if (item.id !== rowId) return item;
+          if (!itemResult?.success) {
+            return {
+              ...item,
+              renameResult: "failed",
+              renameError: itemResult?.reason,
+            };
+          }
+
+          const nextPath = buildTargetPath(item.path, targetFileName);
+          return {
+            ...item,
+            id: nextPath,
+            path: nextPath,
+            fileName: targetFileName,
+            categories: normalizedCategories,
+            renameResult: "success",
+            renameError: undefined,
+            modified: false,
+          };
+        }),
+      );
+      if (itemResult?.success && !mediaRows.some((item) => item.id !== rowId && item.modified)) {
+        dispatch({ type: "MARK_DIRTY", value: false });
+      }
+    } catch (error) {
+      appendError("调用 execute_batch_rename 失败", error);
+      dispatch({ type: "RENAME_FINISHED", success: 0, failed: 1 });
+      window.alert("单行保存失败，请查看下方错误信息。");
+    }
+  }
+
+  async function onSaveMediaBatch() {
+    if (!showMediaBatchEdit) return;
+
+    const selectedRows = mediaRows.filter((row) => row.selected);
+    if (!selectedRows.length) return;
+
+    const normalizedCategories = normalizeCategoriesInput(mediaBatchCategories);
+    setMediaBatchCategories(normalizedCategories);
+
+    const renameItems: RenameItemInput[] = [];
+    let unchangedCount = 0;
+
+    for (const row of selectedRows) {
+      const targetFileName = buildMediaTargetName(row, normalizedCategories);
+      if (targetFileName === row.fileName) {
+        unchangedCount += 1;
+        continue;
+      }
+
+      renameItems.push({
+        id: row.id,
+        sourcePath: row.path,
+        targetFileName,
+      });
+    }
+
+    if (!renameItems.length) {
+      setMediaRows((prev) =>
+        prev.map((row) =>
+          row.selected
+            ? {
+                ...row,
+                categories: normalizedCategories,
+                modified: false,
+              }
+            : row,
+        ),
+      );
+      dispatch({ type: "MARK_DIRTY", value: false });
+      window.alert(`${unchangedCount} 个图片/音乐文件名无变化`);
+      return;
+    }
+
+    dispatch({ type: "RENAME_STARTED" });
+
+    try {
+      const result = await invoke<RenameBatchSummary>("execute_batch_rename", {
+        items: renameItems,
+      });
+
+      dispatch({ type: "RENAME_FINISHED", success: result.success, failed: result.failed });
+      window.alert(
+        `批量修改完成：${result.success} 个成功，${result.failed} 个失败，${unchangedCount} 个图片/音乐文件名无变化`,
+      );
+
+      setMediaRows((prev) =>
+        prev.map((row) => {
+          const matched = result.results.find((item) => item.id === row.id);
+          if (!matched) {
+            if (!row.selected) return row;
+            return {
+              ...row,
+              categories: normalizedCategories,
+              modified: false,
+            };
+          }
+          if (matched.success) {
+            const targetFileName = buildMediaTargetName(row, normalizedCategories);
+            const nextPath = buildTargetPath(row.path, targetFileName);
+            return {
+              ...row,
+              id: nextPath,
+              path: nextPath,
+              fileName: targetFileName,
+              categories: normalizedCategories,
+              renameResult: "success",
+              renameError: undefined,
+              modified: false,
+            };
+          }
+
+          return {
+            ...row,
+            categories: normalizedCategories,
+            renameResult: "failed",
+            renameError: matched.reason,
+          };
+        }),
+      );
+    } catch (error) {
+      appendError("调用 execute_batch_rename 失败", error);
+      dispatch({ type: "RENAME_FINISHED", success: 0, failed: renameItems.length });
+      window.alert("批量重命名失败，请查看下方错误信息。");
+    }
+  }
+
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
@@ -470,6 +755,13 @@ function App() {
       if (!droppedPaths.length) return;
 
       if (activePageRef.current === "filename" && hasUnfinishedChanges(rowsRef.current, guardRef.current)) {
+        pendingPickRef.current = false;
+        pendingFilesRef.current = droppedPaths;
+        setShowGuardModal(true);
+        return;
+      }
+
+      if (activePageRef.current === "media" && hasUnfinishedMediaChanges(mediaRowsRef.current, guardRef.current)) {
         pendingPickRef.current = false;
         pendingFilesRef.current = droppedPaths;
         setShowGuardModal(true);
@@ -518,9 +810,12 @@ function App() {
 
   async function pickFilesFromDialog() {
     try {
+      const filters = activePage === "media"
+        ? [{ name: "图片/音乐文件", extensions: ["png", "jpg", "jpeg", "mp3", "wav"] }]
+        : [{ name: "视频文件", extensions: ["mp4", "mov"] }];
       const picked = await open({
         multiple: true,
-        filters: [{ name: "视频文件", extensions: ["mp4", "mov"] }],
+        filters,
       });
       if (!picked) return;
 
@@ -534,6 +829,13 @@ function App() {
 
   async function onPickFiles() {
     if (activePage === "filename" && hasUnfinishedChanges()) {
+      pendingFilesRef.current = null;
+      pendingPickRef.current = true;
+      setShowGuardModal(true);
+      return;
+    }
+
+    if (activePage === "media" && hasUnfinishedMediaChanges()) {
       pendingFilesRef.current = null;
       pendingPickRef.current = true;
       setShowGuardModal(true);
@@ -577,6 +879,17 @@ function App() {
     setShowClearModal(false);
     pendingFilesRef.current = null;
     pendingPickRef.current = false;
+
+    if (activePage === "media") {
+      setMediaRows([]);
+      setShowMediaBatchEdit(false);
+      setMediaBatchCategories("");
+      setErrorLog([]);
+      setShowErrorPanel(false);
+      dispatch({ type: "MARK_DIRTY", value: false });
+      return;
+    }
+
     setRows([]);
     setShowBatchEdit(false);
     setBatchForm({ headCut: "", tailCut: "", zoomRatio: "", zoomMode: "", categories: "" });
@@ -654,10 +967,6 @@ function App() {
       }),
     );
     dispatch({ type: "MARK_DIRTY", value: true });
-  }
-
-  function normalizeCategoriesInput(value: string): string {
-    return value.replace(/&/g, "\n");
   }
 
   function onCategoriesChange(rowId: string, value: string) {
@@ -1172,7 +1481,11 @@ function App() {
     if (pendingFilesRef.current) {
       const paths = pendingFilesRef.current;
       pendingFilesRef.current = null;
-      await parseInputPaths(paths);
+      if (activePageRef.current === "media") {
+        await parseMediaInputPaths(paths);
+      } else {
+        await parseInputPaths(paths);
+      }
       return;
     }
 
@@ -1188,24 +1501,43 @@ function App() {
     setShowGuardModal(false);
   }
 
+  const pageClass = {
+    filename: "filename-page",
+    resolution: "resolution-page",
+    media: "media-page",
+  }[activePage];
+
+  const pageTitle = {
+    filename: "视频文件名",
+    resolution: "视频分辨率",
+    media: "图片/音乐文件名",
+  }[activePage];
+
   return (
-    <main className={`page ${activePage === "filename" ? "filename-page" : "resolution-page"}`}>
+    <main className={`page ${pageClass}`}>
       <header className="app-header">
-        <h1>{activePage === "filename" ? "文件名参数批处理" : "视频分辨率批处理"}</h1>
+        <h1>{pageTitle}</h1>
         <div className="page-switch">
           <button
             type="button"
             className={activePage === "filename" ? "active" : ""}
             onClick={() => setActivePage("filename")}
           >
-            文件名处理
+            视频文件名
           </button>
           <button
             type="button"
             className={activePage === "resolution" ? "active" : ""}
             onClick={() => setActivePage("resolution")}
           >
-            分辨率处理
+            视频分辨率
+          </button>
+          <button
+            type="button"
+            className={activePage === "media" ? "active" : ""}
+            onClick={() => setActivePage("media")}
+          >
+            图片/音乐文件名
           </button>
         </div>
       </header>
@@ -1488,6 +1820,123 @@ function App() {
           </table>
         </section>
       )}
+        </>
+      ) : activePage === "media" ? (
+        <>
+          <section className="toolbar">
+            <button type="button" onClick={onMediaBatchEdit} disabled={!mediaRows.length}>
+              批量修改
+            </button>
+            <button type="button" onClick={onClearList} disabled={!mediaRows.length}>
+              清空列表
+            </button>
+          </section>
+
+          <section
+            className="dropzone"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={onDropFiles}
+            onClick={onPickFiles}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                void onPickFiles();
+              }
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            拖拽 PNG/JPG/JPEG/MP3/WAV 文件到这里，或点击选择文件
+          </section>
+
+          {!!mediaRows.length && (
+            <section className="table-wrap">
+              <table style={{ tableLayout: "fixed" }}>
+                <colgroup>
+                  {showMediaBatchEdit && <col style={{ width: "48px" }} />}
+                  <col style={{ width: "320px" }} />
+                  <col style={{ width: "240px" }} />
+                  <col style={{ width: "320px" }} />
+                  <col style={{ width: "112px" }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    {showMediaBatchEdit && <th>选中</th>}
+                    <th>原文件名</th>
+                    <th>分类</th>
+                    <th>目标文件名</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {showMediaBatchEdit && (
+                    <tr className="batch-inline-row">
+                      <td>
+                        <input type="checkbox" checked readOnly />
+                      </td>
+                      <td>
+                        <input value="保持原名称" disabled className="video-name-input batch-video-name-input" />
+                      </td>
+                      <td>
+                        <textarea
+                          className="categories-input"
+                          value={mediaBatchCategories}
+                          onChange={(e) => onMediaBatchCategoriesChange(e.target.value)}
+                          rows={2}
+                          placeholder={"留空保持不变\n分类1\n分类2"}
+                        />
+                      </td>
+                      <td>-</td>
+                      <td>
+                        <button type="button" className="batch-save-btn" onClick={() => void onSaveMediaBatch()}>
+                          应用到所选文件
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                  {mediaRows.map((row) => (
+                    <tr key={row.id} className={row.modified ? "warn" : ""}>
+                      {showMediaBatchEdit && (
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={row.selected}
+                            onChange={(e) => onToggleMediaSelect(row.id, e.target.checked)}
+                          />
+                        </td>
+                      )}
+                      <td>{row.fileName}</td>
+                      <td>
+                        <textarea
+                          className="categories-input"
+                          value={row.categories}
+                          onChange={(e) => onMediaCategoriesChange(row.id, e.target.value)}
+                          rows={2}
+                          placeholder="分类1&#10;分类2"
+                        />
+                      </td>
+                      <td>{buildMediaTargetName(row)}</td>
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="row-save-btn"
+                            onClick={() => void onSaveMediaRow(row.id)}
+                            disabled={!row.modified}
+                          >
+                            保存
+                          </button>
+                          <button type="button" onClick={() => onReveal(row.path)}>
+                            定位
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
         </>
       ) : (
         <>

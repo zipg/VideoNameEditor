@@ -5,8 +5,9 @@ import App from "./App";
 describe("App", () => {
   it("shows page title and page switch", () => {
     render(<App />);
-    expect(screen.getByText("文件名参数批处理")).toBeInTheDocument();
-    expect(screen.getByText("文件名处理")).toBeInTheDocument();
-    expect(screen.getByText("分辨率处理")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "视频文件名" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "视频文件名" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "视频分辨率" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "图片/音乐文件名" })).toBeInTheDocument();
   });
 });

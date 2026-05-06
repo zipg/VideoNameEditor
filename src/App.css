@@ -60,6 +60,15 @@ body {
   background: linear-gradient(135deg, #f3f4f6 0%, #eef2ff 100%);
 }
 
+.media-page {
+  background: linear-gradient(135deg, #fff7ed 0%, #fce7f3 100%);
+}
+
+.media-page::before {
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%);
+}
+
+
 @keyframes page-bg-fade {
   from {
     opacity: 1;
