@@ -19,5 +19,23 @@ describe("App", () => {
       categories: "搞笑\n教程",
     });
   });
+
+  it("parses existing media categories from webp file name", () => {
+    expect(parseMediaFileName("封面图-搞笑&教程.webp")).toEqual({
+      fileName: "封面图-搞笑&教程.webp",
+      baseName: "封面图",
+      extension: ".webp",
+      categories: "搞笑\n教程",
+    });
+  });
+
+  it("keeps empty categories for plain webp file name", () => {
+    expect(parseMediaFileName("封面图.webp")).toEqual({
+      fileName: "封面图.webp",
+      baseName: "封面图",
+      extension: ".webp",
+      categories: "",
+    });
+  });
 });
 

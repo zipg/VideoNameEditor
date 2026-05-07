@@ -538,12 +538,12 @@ function App() {
 
   async function parseMediaInputPaths(paths: string[]) {
     const normalizedPaths = paths.map((p) => p.trim()).filter(Boolean);
-    const mediaPaths = normalizedPaths.filter((p) => /\.(png|jpg|jpeg|mp3|wav)$/i.test(p));
+    const mediaPaths = normalizedPaths.filter((p) => /\.(png|jpg|jpeg|webp|mp3|wav)$/i.test(p));
     setErrorLog([]);
     setShowErrorPanel(false);
 
     if (!mediaPaths.length) {
-      appendError("未找到可处理的图片/音乐文件", "请确认选择或拖拽的是 .png / .jpg / .jpeg / .mp3 / .wav 文件");
+      appendError("未找到可处理的图片/音乐文件", "请确认选择或拖拽的是 .png / .jpg / .jpeg / .webp / .mp3 / .wav 文件");
       return;
     }
 
@@ -847,7 +847,7 @@ function App() {
   async function pickFilesFromDialog() {
     try {
       const filters = activePage === "media"
-        ? [{ name: "图片/音乐文件", extensions: ["png", "jpg", "jpeg", "mp3", "wav"] }]
+        ? [{ name: "图片/音乐文件", extensions: ["png", "jpg", "jpeg", "webp", "mp3", "wav"] }]
         : [{ name: "视频文件", extensions: ["mp4", "mov"] }];
       const picked = await open({
         multiple: true,
@@ -1882,7 +1882,7 @@ function App() {
             role="button"
             tabIndex={0}
           >
-            拖拽 PNG/JPG/JPEG/MP3/WAV 文件到这里，或点击选择文件
+            拖拽 PNG/JPG/JPEG/WEBP/MP3/WAV 文件到这里，或点击选择文件
           </section>
 
           {!!mediaRows.length && (
