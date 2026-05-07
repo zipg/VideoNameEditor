@@ -1556,17 +1556,17 @@ function App() {
         <div className="page-switch">
           <button
             type="button"
-            className={activePage === "filename" ? "active" : ""}
-            onClick={() => setActivePage("filename")}
-          >
-            视频文件名
-          </button>
-          <button
-            type="button"
             className={activePage === "resolution" ? "active" : ""}
             onClick={() => setActivePage("resolution")}
           >
             视频分辨率
+          </button>
+          <button
+            type="button"
+            className={activePage === "filename" ? "active" : ""}
+            onClick={() => setActivePage("filename")}
+          >
+            视频文件名
           </button>
           <button
             type="button"
