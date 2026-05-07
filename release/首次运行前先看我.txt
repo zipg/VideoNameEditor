@@ -1,6 +1,6 @@
-1. 将 视频批处理工具.app 拖拽复制到「应用程序」文件夹 (Applications)。
+1. 将 素材批处理工具.app 拖拽复制到「应用程序」文件夹 (Applications)。
 
 2. 打开「终端」，运行：
-   xattr -cr /Applications/视频批处理工具.app
+   xattr -cr /Applications/素材批处理工具.app
 
 3. 启动本工具（可在启动台或应用程序中找到）。
